@@ -8,7 +8,7 @@ import streamlit as st
 from components.guard import require_principal
 from components.theme import COLORS, apply_chart_theme
 from components.ui import (
-    empty_state, format_bits_rate, format_bytes_rate, format_ratio, format_timestamp,
+    SOURCE_LABELS, empty_state, format_bits_rate, format_bytes_rate, format_ratio, format_timestamp,
     kpi_tile, page_header, section_label, step_cards,
 )
 from services import dashboard_service
@@ -40,8 +40,8 @@ if not data.has_any_data:
         "sessions run. Here is what happens next:",
     )
     steps = [
-        ("Import telemetry", "Upload historical network metrics or a labelled flow dataset (CSV) to "
-         "populate traffic rates and throughput.", "Arrives in Phase 2", False),
+        ("Import telemetry", "Upload historical network metrics or a labelled flow dataset (CSV) in the "
+         "ML Laboratory to populate traffic rates and throughput.", "Available now", True),
         ("Train models", "Train the Smart Shield intrusion detector and the PredictNet forecaster, "
          "with evaluation metrics stored in the model registry.", "Arrives in Phases 3–4", False),
         ("Monitor live traffic", "Start passive monitoring on an authorized interface to record measured "
@@ -52,6 +52,9 @@ if not data.has_any_data:
                          "roles and review the audit log in Administration.", "Available now", True))
     step_cards(steps)
     st.write("")
+    if principal.has(Permission.MANAGE_DATASETS):
+        st.page_link("views/ml_lab.py", label="Import telemetry in the ML Laboratory", icon=":material/upload:")
+    st.write("")
 
 # ---------------------------------------------------------------- traffic
 section_label("Traffic")
@@ -59,7 +62,8 @@ c1, c2, c3, c4 = st.columns(4)
 with c1:
     status = data.monitoring
     foot = "No monitoring sessions recorded yet" if status.status == "NONE" else (
-        f"{status.interface_name or status.source_type} · since {format_timestamp(status.started_at)}"
+        f"{SOURCE_LABELS.get(status.source_type, status.source_type)}"
+        f"{' · ' + status.interface_name if status.interface_name else ''} · {format_timestamp(status.started_at)}"
     )
     kpi_tile("Monitoring status", MONITORING_LABELS.get(status.status, status.status),
              "measured" if status.status != "NONE" else "unavailable", foot)

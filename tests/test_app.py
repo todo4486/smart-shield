@@ -88,3 +88,56 @@ def test_login_through_the_form(admin_user):
     at.run()
     assert not at.exception
     assert "Network health across Smart Shield" in _all_text(at)
+
+
+TELEMETRY = (
+    b"timestamp,interface_name,incoming_bytes_per_second,outgoing_bytes_per_second,latency_ms\n"
+    b"2026-10-01T00:00:00Z,eth0,1000,500,12\n"
+    b"2026-10-01T00:05:00Z,eth0,2000,800,\n"
+    b"2026-10-01T00:10:00Z,eth0,1800,600,13\n"
+    b"2026-10-01T01:30:00Z,eth0,1500,700,14\n"  # gap -> exercises chart gap breaks
+)
+
+
+def _run_page(user, page: str) -> AppTest:
+    at = AppTest.from_file(APP, default_timeout=TIMEOUT)
+    at.session_state[session_service.USER_ID_KEY] = user.id
+    at.session_state[session_service.LAST_ACTIVITY_KEY] = utc_now()
+    at.switch_page(page)
+    return at.run()
+
+
+def test_ml_lab_and_live_monitoring_render_empty(analyst_user):
+    at = _run_page(analyst_user, "views/ml_lab.py")
+    assert not at.exception
+    assert "Upload historical network performance measurements" in _all_text(at)
+    at = _run_page(analyst_user, "views/live_monitoring.py")
+    assert not at.exception
+    assert "No monitoring sessions yet" in _all_text(at)
+
+
+def test_live_monitoring_renders_imported_session(analyst_user, admin_user):
+    from services import dataset_service, telemetry_service
+    from services.dataset_service import FlowImportOptions
+    from services.telemetry_service import TelemetryImportOptions
+    from tests.test_datasets import cic_rows
+
+    principal = analyst_user.to_principal()
+    imported = telemetry_service.import_telemetry_csv(
+        principal, TELEMETRY, "t.csv", TelemetryImportOptions(source_name="lab"))
+    flows = dataset_service.register_intrusion_dataset(
+        principal, cic_rows(), "cic.csv", "cic", FlowImportOptions(enabled=True))
+    for user in (analyst_user, admin_user):
+        at = _run_page(user, "views/live_monitoring.py")
+        assert not at.exception, at.exception
+        assert "Session history" in _all_text(at)
+        assert at.selectbox[0].value == flows.flow_session_id  # newest session first
+        at.selectbox[0].select(imported.session_id).run()
+        assert not at.exception, at.exception
+        # No capacity in the file -> utilization is unavailable, no invented percentage.
+        assert "Utilization is **unavailable**" in _all_text(at)
+    at = _run_page(admin_user, "views/overview.py")
+    assert not at.exception
+    assert "No network data yet" not in _all_text(at)
+    at = _run_page(analyst_user, "views/ml_lab.py")
+    assert not at.exception

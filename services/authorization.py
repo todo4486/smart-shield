@@ -29,6 +29,7 @@ class Permission(str, Enum):
     CONTROL_MONITORING = "control_monitoring"
     MANAGE_SETTINGS = "manage_settings"
     APPLY_TRAFFIC_POLICY = "apply_traffic_policy"
+    DELETE_DATA = "delete_data"
     MANAGE_USERS = "manage_users"
     VIEW_AUDIT_LOG = "view_audit_log"
 

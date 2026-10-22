@@ -6,7 +6,7 @@ from html import escape
 import streamlit as st
 
 from config import ASSETS_DIR
-from components.ui import format_timestamp, section_label
+from components.ui import SOURCE_LABELS, format_timestamp, section_label
 from services import dashboard_service, database_service, session_service
 from services.authorization import Principal
 
@@ -35,8 +35,10 @@ def render_sidebar(principal: Principal) -> None:
     if status.status == "NONE":
         detail = "No monitoring sessions recorded yet"
     else:
-        source = status.interface_name or status.source_type or "unknown source"
-        detail = f"{source} · since {format_timestamp(status.started_at)}"
+        source = SOURCE_LABELS.get(status.source_type, status.source_type or "unknown source")
+        if status.interface_name:
+            source += f" · {status.interface_name}"
+        detail = f"Last session: {source}"
 
     with st.sidebar:
         st.divider()

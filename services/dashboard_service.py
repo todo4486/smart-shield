@@ -80,10 +80,14 @@ def get_monitoring_status(principal: Principal) -> MonitoringStatus:
         return _monitoring_status(dashboard_repository.latest_monitoring_session(conn))
 
 
-def _metric_value(row, column: str, unit: str) -> LabeledValue:
+def _metric_value(row, column: str, unit: str, provenance_column: Optional[str] = None) -> LabeledValue:
+    """Use the field-level provenance when the importer recorded one (derived values), else the row's."""
     if row is None or row[column] is None:
         return LabeledValue.unavailable(unit)
-    return LabeledValue(value=float(row[column]), provenance=row["provenance"], unit=unit, as_of=row["timestamp"])
+    provenance = row["provenance"]
+    if provenance_column and row[provenance_column]:
+        provenance = row[provenance_column]
+    return LabeledValue(value=float(row[column]), provenance=provenance, unit=unit, as_of=row["timestamp"])
 
 
 def get_overview(principal: Principal, *, series_hours: int = 24) -> OverviewData:
@@ -107,7 +111,7 @@ def get_overview(principal: Principal, *, series_hours: int = 24) -> OverviewDat
             "ratio", note="Link capacity is not configured, so utilization cannot be computed."
         )
     else:
-        utilization = _metric_value(metric, "utilization_ratio", "ratio")
+        utilization = _metric_value(metric, "utilization_ratio", "ratio", "utilization_provenance")
 
     if flow_count is None:
         active_flows = LabeledValue.unavailable("flows")
@@ -129,7 +133,7 @@ def get_overview(principal: Principal, *, series_hours: int = 24) -> OverviewDat
         monitoring=_monitoring_status(session_row),
         incoming_bps=_metric_value(metric, "incoming_bytes_per_second", "B/s"),
         outgoing_bps=_metric_value(metric, "outgoing_bytes_per_second", "B/s"),
-        throughput_bps=_metric_value(metric, "throughput_bps", "bit/s"),
+        throughput_bps=_metric_value(metric, "throughput_bps", "bit/s", "throughput_provenance"),
         utilization=utilization,
         active_flows=active_flows,
         unresolved_alerts=alerts,

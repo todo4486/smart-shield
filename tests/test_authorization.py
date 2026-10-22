@@ -15,6 +15,7 @@ ADMIN_ONLY = {
     Permission.ACTIVATE_MODELS,
     Permission.CONTROL_MONITORING,
     Permission.APPLY_TRAFFIC_POLICY,
+    Permission.DELETE_DATA,
 }
 
 

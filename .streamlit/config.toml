@@ -12,6 +12,7 @@ showErrorDetails = false
 
 [server]
 runOnSave = false
+maxUploadSize = 512
 
 [browser]
 gatherUsageStats = false

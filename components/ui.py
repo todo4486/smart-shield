@@ -7,6 +7,13 @@ from typing import Iterable, Optional, Sequence, Tuple
 
 import streamlit as st
 
+SOURCE_LABELS = {
+    "historical_import": "Historical import",
+    "dataset": "Dataset flows",
+    "flow_import": "Flow records",
+    "live_capture": "Live capture",
+}
+
 PROVENANCE_LABELS = {
     "measured": "Measured",
     "derived": "Derived",

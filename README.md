@@ -3,8 +3,14 @@
 An AI-powered network intelligence platform for intrusion detection, congestion prediction and
 intelligent bandwidth management (final-year CS project). Requirements: `docs/SPEC.md`. Project rules: `CLAUDE.md`.
 
-**Status: Phase 1 (foundation).** Authentication, database, shared UI, Overview dashboard and
-Administration are working. All other pages show a "Planned for Phase X" notice. Nothing is simulated.
+**Status: Phase 2 (shared telemetry).** Working now:
+
+- Phase 1: authentication, database, shared UI, the Overview dashboard and Administration.
+- Historical telemetry import and labelled intrusion-dataset registration, in **ML Laboratory → Data sources**.
+- Monitoring sessions, with telemetry and flow charts, in **Live Monitoring**.
+
+Pages for later phases show a "Planned for Phase X" notice. Nothing is simulated.
+File formats are described in `docs/TELEMETRY_SCHEMA.md`.
 
 ## Setup
 
@@ -58,3 +64,5 @@ app.py (router) → views/ (pages) → components/ (UI) → services/ (logic + a
 * Sessions live in Streamlit server memory: refreshing the browser or opening a new tab requires signing in again.
 * Sessions end after `SMART_SHIELD_SESSION_IDLE_MINUTES` of inactivity (default 30).
 * Lockout is per email address (no client IP is available to Streamlit apps).
+* Live packet capture is not implemented yet (Phase 7). Monitoring sessions come from imports and datasets.
+* Uploads are read into memory. Large CIC-IDS2017 days (≈ 200–300 MB) work, but need a few GB of free RAM.
