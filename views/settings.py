@@ -59,6 +59,7 @@ if saved:
         st.rerun()
 
 st.write("")
-planned_notice("Phases 5–8", "More settings", "Further configuration arrives with the features that use it.",
-               ["Link capacity and traffic classes (Phase 5)", "Traffic-shaping backend, off by default (Phase 5)",
-                "Data retention (Phase 8)"])
+st.caption("Link capacity and traffic classes are configured per policy under **Bandwidth Management**. The "
+           "traffic-shaping backend is configured only through `.env` on the server and is off by default.")
+planned_notice("Phase 8", "More settings", "Further configuration arrives with the features that use it.",
+               ["Data retention", "Live-monitoring interface allow-list (Phase 7)"])

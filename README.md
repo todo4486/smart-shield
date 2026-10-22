@@ -3,7 +3,7 @@
 An AI-powered network intelligence platform for intrusion detection, congestion prediction and
 intelligent bandwidth management (final-year CS project). Requirements: `docs/SPEC.md`. Project rules: `CLAUDE.md`.
 
-**Status: Phase 4 (PredictNet).** Working now:
+**Status: Phase 5 (Bandwidth Management).** Working now:
 
 - Phase 1: authentication, database, shared UI, the Overview dashboard and Administration.
 - Historical telemetry import and labelled intrusion-dataset registration, in **ML Laboratory → Data sources**.
@@ -17,6 +17,12 @@ intelligent bandwidth management (final-year CS project). Requirements: `docs/SP
 - Forecast-vs-actual charts, congestion risk, congestion alerts with cooldowns, and forecast history, in the
   **PredictNet Congestion Center**.
 - Validated, admin-only PredictNet settings (thresholds, horizons, alert rules), in **Settings**.
+- **Bandwidth Management**:
+  - Traffic-class policies and recommendations from deterministic weighted water-filling. Totals never exceed
+    capacity, unmet demand is reported, and demand provenance is labelled.
+  - Recommendation history with admin review.
+  - Optional Linux `tc` enforcement: off by default, allow-listed, admin-only, confirmed, audited and
+    reversible with rollback and emergency disable.
 
 Pages for later phases show a "Planned for Phase X" notice. Nothing is simulated.
 File formats are described in `docs/TELEMETRY_SCHEMA.md`.
@@ -46,6 +52,10 @@ streamlit run app.py
 ```
 
 The first account registered in the app becomes the administrator; later accounts are analysts.
+
+**Want something to try it with?** `samples/` contains clearly labelled synthetic CSVs: 7 days of telemetry, a
+file with deliberate errors, and CIC-IDS2017-style train and test days. Its README says what each file
+demonstrates. Regenerate them with `python -m scripts.make_sample_data`.
 Alternatively create an admin from the terminal: `python -m scripts.manage create-admin`.
 
 ## Commands
@@ -56,6 +66,7 @@ Alternatively create an admin from the terminal: `python -m scripts.manage creat
 | `python -m scripts.manage create-admin` | Create an admin account (password prompted, never passed as an argument) |
 | `python -m scripts.manage dump-schema` | Regenerate `database/schema.sql` after adding a migration |
 | `python -m scripts.manage dump-schema --check` | Fail if `schema.sql` is out of date |
+| `python -m scripts.make_sample_data` | Regenerate the labelled synthetic sample CSVs in `samples/` |
 | `pytest -q` | Run the test suite (each test uses its own temporary database) |
 
 ## Architecture
@@ -77,4 +88,7 @@ app.py (router) → views/ (pages) → components/ (UI) → services/ (logic + a
 * Models are trained in the Streamlit process. A 200k-row Smart Shield run takes about a minute on a laptop.
   Training and scoring row limits keep memory bounded.
 * Forecasts come from imported historical telemetry; live forecasting follows live capture in Phase 7.
+* Per-class bandwidth demand is entered or scaled from total throughput, because no data source measures it per class yet.
+* Traffic shaping needs Linux with `tc` and CAP_NET_ADMIN. It is unavailable on macOS and Windows, where
+  recommendation mode still works fully.
 * Uploads are read into memory. Large CIC-IDS2017 days (≈ 200–300 MB) work, but need a few GB of free RAM.

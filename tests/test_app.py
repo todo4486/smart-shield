@@ -15,6 +15,7 @@ TIMEOUT = 30
 
 def _all_text(at: AppTest) -> str:
     parts = [m.value for m in at.markdown] + [i.value for i in at.info] + [e.value for e in at.error]
+    parts += [w.value for w in at.warning] + [s.value for s in at.success]
     parts += [h.value for h in at.header] + [s.value for s in at.subheader] + [c.value for c in at.caption]
     return "\n".join(str(p) for p in parts)
 
@@ -202,3 +203,18 @@ def test_predictnet_and_settings_pages(admin_user, analyst_user):
     assert not at.exception and "Only administrators can change settings." in _all_text(at)
     at = _run_page(admin_user, "views/settings.py")
     assert not at.exception and "Only administrators" not in _all_text(at)
+
+
+def test_bandwidth_page(admin_user, analyst_user):
+    from services import bandwidth_service
+
+    at = _run_page(analyst_user, "views/bandwidth.py")
+    assert not at.exception and "No bandwidth policies exist yet" in _all_text(at)
+    admin = admin_user.to_principal()
+    bandwidth_service.save_policy(admin, bandwidth_service.template_policy(1e9, interface="eth0"))
+    bandwidth_service.recommend(admin, "TEMPLATE four-class policy", {"critical": 1e8, "standard": 9e8})
+    for user in (analyst_user, admin_user):
+        at = _run_page(user, "views/bandwidth.py")
+        assert not at.exception, at.exception
+        text = _all_text(at)
+        assert "Recommendation mode." in text and "Enforcement is not available on this server" in text

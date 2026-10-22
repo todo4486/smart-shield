@@ -61,7 +61,7 @@ CREATE TABLE bandwidth_policies (
     priority_weight          REAL    NOT NULL CHECK (priority_weight > 0),
     enabled                  INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
     created_at               TEXT    NOT NULL,
-    updated_at               TEXT    NOT NULL,
+    updated_at               TEXT    NOT NULL, dscp INTEGER CHECK (dscp IS NULL OR dscp BETWEEN 0 AND 63),
     UNIQUE (policy_name, traffic_class)
 );
 
@@ -257,6 +257,8 @@ CREATE INDEX idx_audit_logs_created ON audit_logs (created_at);
 
 CREATE INDEX idx_audit_logs_user ON audit_logs (user_id);
 
+CREATE INDEX idx_bandwidth_policies_name ON bandwidth_policies (policy_name);
+
 CREATE INDEX idx_bandwidth_recommendations_time ON bandwidth_recommendations (timestamp);
 
 CREATE INDEX idx_congestion_predictions_risk ON congestion_predictions (congestion_risk);
@@ -296,6 +298,8 @@ CREATE INDEX idx_network_metrics_source_iface_time ON network_metrics (source_na
 CREATE INDEX idx_network_metrics_time ON network_metrics (timestamp);
 
 CREATE INDEX idx_policy_actions_executed ON policy_actions (executed_at);
+
+CREATE INDEX idx_policy_actions_interface ON policy_actions (target_interface, executed_at);
 
 CREATE INDEX idx_users_role_active ON users (role, is_active);
 
