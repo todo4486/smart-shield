@@ -1,0 +1,32 @@
+# Environment and secrets
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime data (keep the folders, not the contents)
+data/*
+!data/.gitkeep
+artifacts/*
+!artifacts/.gitkeep
+reports/*
+!reports/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+*.pcap
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
