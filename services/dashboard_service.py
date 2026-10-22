@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 from repositories import dashboard_repository
 from services import database_service
 from services.authorization import Permission, Principal, require_permission
-from services.timeutil import to_iso, utc_now
+from services.timeutil import parse_iso, to_iso
 
 UNAVAILABLE = "unavailable"
 
@@ -56,6 +56,7 @@ class OverviewData:
     recent_incidents: List[dict]
     throughput_series: List[dict]
     counts: Dict[str, int] = field(default_factory=dict)
+    top_alerts: List[dict] = field(default_factory=list)
 
     @property
     def has_any_data(self) -> bool:
@@ -92,7 +93,6 @@ def _metric_value(row, column: str, unit: str, provenance_column: Optional[str] 
 
 def get_overview(principal: Principal, *, series_hours: int = 24) -> OverviewData:
     require_permission(principal, Permission.VIEW_DASHBOARD, action="dashboard.view")
-    since = to_iso(utc_now() - timedelta(hours=series_hours))
     with database_service.session() as conn:
         counts = dashboard_repository.table_counts(conn)
         session_row = dashboard_repository.latest_monitoring_session(conn)
@@ -101,7 +101,12 @@ def get_overview(principal: Principal, *, series_hours: int = 24) -> OverviewDat
         prediction = dashboard_repository.latest_prediction(conn)
         recommendation = dashboard_repository.latest_recommendation(conn)
         incidents = dashboard_repository.recent_incidents(conn)
-        series = dashboard_repository.metrics_since(conn, since)
+        top_alerts = dashboard_repository.top_open_alerts(conn)
+        # The chart shows the newest `series_hours` of stored data (imports can be historical), not wall-clock time.
+        series = []
+        if metric is not None:
+            since = to_iso(parse_iso(metric["timestamp"]) - timedelta(hours=series_hours))
+            series = dashboard_repository.metrics_since(conn, since)
         flow_count = (
             dashboard_repository.flow_count_for_session(conn, session_row["id"]) if session_row is not None else None
         )
@@ -145,4 +150,5 @@ def get_overview(principal: Principal, *, series_hours: int = 24) -> OverviewDat
         recent_incidents=[dict(r) for r in incidents],
         throughput_series=[dict(r) for r in series],
         counts=counts,
+        top_alerts=[dict(r) for r in top_alerts],
     )

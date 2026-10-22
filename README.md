@@ -3,7 +3,7 @@
 An AI-powered network intelligence platform for intrusion detection, congestion prediction and
 intelligent bandwidth management (final-year CS project). Requirements: `docs/SPEC.md`. Project rules: `CLAUDE.md`.
 
-**Status: Phase 5 (Bandwidth Management).** Working now:
+**Status: Phase 6 (Integration).** Working now:
 
 - Phase 1: authentication, database, shared UI, the Overview dashboard and Administration.
 - Historical telemetry import and labelled intrusion-dataset registration, in **ML Laboratory → Data sources**.
@@ -23,6 +23,13 @@ intelligent bandwidth management (final-year CS project). Requirements: `docs/SP
   - Recommendation history with admin review.
   - Optional Linux `tc` enforcement: off by default, allow-listed, admin-only, confirmed, audited and
     reversible with rollback and emergency disable.
+- **Incident Center**:
+  - Correlates security and congestion alerts on the network timeline into incidents (combined / performance /
+    security) with measured traffic changes, model outputs, rationale and investigation steps.
+  - Congestion alone is never treated as an attack.
+  - Incident triage with notes, and a unified view of all alerts.
+- **Overview**: a network health summary built from persisted data, the most severe unresolved alerts from both
+  engines, and a chart of the newest 24 hours of stored measurements.
 
 Pages for later phases show a "Planned for Phase X" notice. Nothing is simulated.
 File formats are described in `docs/TELEMETRY_SCHEMA.md`.
@@ -88,6 +95,8 @@ app.py (router) → views/ (pages) → components/ (UI) → services/ (logic + a
 * Models are trained in the Streamlit process. A 200k-row Smart Shield run takes about a minute on a laptop.
   Training and scoring row limits keep memory bounded.
 * Forecasts come from imported historical telemetry; live forecasting follows live capture in Phase 7.
+* Correlation of dataset-based Smart Shield alerts with congestion is by time only, because those alerts do not
+  identify a network interface.
 * Per-class bandwidth demand is entered or scaled from total throughput, because no data source measures it per class yet.
 * Traffic shaping needs Linux with `tc` and CAP_NET_ADMIN. It is unavailable on macOS and Windows, where
   recommendation mode still works fully.

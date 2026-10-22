@@ -133,7 +133,7 @@ CREATE TABLE incidents (
     created_by                 INTEGER REFERENCES users (id) ON DELETE SET NULL,
     created_at                 TEXT    NOT NULL,
     updated_at                 TEXT    NOT NULL
-);
+, investigation_notes TEXT);
 
 CREATE TABLE login_attempts (
     id            INTEGER PRIMARY KEY,
@@ -247,6 +247,8 @@ CREATE INDEX idx_alerts_created ON alerts (created_at);
 
 CREATE INDEX idx_alerts_dedup ON alerts (dedup_key, created_at);
 
+CREATE INDEX idx_alerts_status_created ON alerts (status, created_at);
+
 CREATE INDEX idx_alerts_status_severity ON alerts (status, severity);
 
 CREATE INDEX idx_alerts_type ON alerts (alert_type);
@@ -274,6 +276,8 @@ CREATE INDEX idx_incident_alerts_alert ON incident_alerts (alert_id);
 CREATE INDEX idx_incidents_created ON incidents (created_at);
 
 CREATE INDEX idx_incidents_status ON incidents (status);
+
+CREATE INDEX idx_incidents_window ON incidents (window_start, window_end);
 
 CREATE INDEX idx_login_attempts_key_time ON login_attempts (email_key, attempted_at);
 

@@ -11,7 +11,9 @@ from components.ui import (
     SOURCE_LABELS, empty_state, format_bits_rate, format_bytes_rate, format_ratio, format_timestamp,
     kpi_tile, page_header, section_label, step_cards,
 )
-from services import dashboard_service
+from html import escape
+
+from services import dashboard_service, health_summary_service
 from services.authorization import Permission
 
 principal = require_principal()
@@ -54,6 +56,20 @@ if not data.has_any_data:
     st.write("")
     if principal.has(Permission.MANAGE_DATASETS):
         st.page_link("views/ml_lab.py", label="Import telemetry in the ML Laboratory", icon=":material/upload:")
+    st.write("")
+
+# ------------------------------------------------------------- health summary
+if data.has_any_data:
+    LEVEL_COLORS = {"ok": COLORS["ok"], "info": COLORS["accent"], "warn": COLORS["warn"], "critical": COLORS["critical"]}
+    statements = health_summary_service.summarize(principal)
+    worst = next((lvl for lvl in ("critical", "warn", "info", "ok") if any(s.level == lvl for s in statements)), "ok")
+    items = "".join(
+        f"<li style='margin:.25rem 0'><span class='ss-dot' style='background:{LEVEL_COLORS[s.level]};margin-right:.5rem'>"
+        f"</span>{escape(s.text)} <span style='color:#8B97AD;font-size:.75rem'>· {escape(s.source)}</span></li>"
+        for s in statements)
+    st.markdown(f"<div class='ss-card' style='border-left:4px solid {LEVEL_COLORS[worst]}'><h4>Network health summary"
+                f"</h4><ul style='list-style:none;padding-left:0;margin:0;color:#E6EBF5'>{items}</ul></div>",
+                unsafe_allow_html=True)
     st.write("")
 
 # ---------------------------------------------------------------- traffic
@@ -120,9 +136,19 @@ if data.throughput_series:
         if not series.empty:
             fig.add_trace(go.Scatter(x=series["timestamp"], y=series[column], name=name, mode="lines",
                                      line=dict(color=color, width=2)))
-    fig.update_layout(title="Measured traffic — last 24 hours", yaxis_title="Bytes per second")
+    fig.update_layout(title="Measured traffic · newest 24 hours of stored data · UTC", yaxis_title="Bytes per second")
     st.plotly_chart(apply_chart_theme(fig), theme=None)
     st.caption("Gaps mean no measurement was recorded; they are not drawn as zero.")
+
+# ---------------------------------------------------------- unified alerts
+if data.top_alerts:
+    st.write("")
+    section_label("Most severe unresolved alerts (Smart Shield and PredictNet)")
+    st.dataframe(pd.DataFrame([{
+        "ID": a["id"], "Severity": a["severity"], "Type": a["alert_type"], "Category": a["category"],
+        "Status": a["status"], "Model": a["model_version"] or "—", "Raised": format_timestamp(a["created_at"])}
+        for a in data.top_alerts]), hide_index=True)
+    st.page_link("views/incident_center.py", label="Investigate in the Incident Center", icon=":material/crisis_alert:")
 
 # ------------------------------------------------- recommendations/incidents
 if data.latest_recommendation or data.recent_incidents:

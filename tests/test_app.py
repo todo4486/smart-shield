@@ -218,3 +218,27 @@ def test_bandwidth_page(admin_user, analyst_user):
         assert not at.exception, at.exception
         text = _all_text(at)
         assert "Recommendation mode." in text and "Enforcement is not available on this server" in text
+
+
+def test_incident_center_and_overview_summary(admin_user, analyst_user):
+    from tests.test_incident_correlation import T0, congestion_alert, security_alert, telemetry
+    from datetime import timedelta
+
+    at = _run_page(analyst_user, "views/incident_center.py")
+    assert not at.exception and "No incidents match" in _all_text(at)
+
+    telemetry(analyst_user.to_principal(), [(T0 + timedelta(minutes=m), 1e6 * (1 + (m > 0)), 0.3) for m in range(-60, 61, 5)])
+    security_alert(T0)
+    congestion_alert(T0 + timedelta(minutes=5))
+    at = _run_page(analyst_user, "views/incident_center.py")
+    correlate = next(b for b in at.button if b.label.startswith("Correlate"))
+    correlate.click().run()
+    assert not at.exception, at.exception
+    text = _all_text(at)
+    assert "Security + congestion" in text and "Suggested investigation steps" in text
+    for user in (analyst_user, admin_user):
+        at = _run_page(user, "views/overview.py")
+        assert not at.exception, at.exception
+        text = _all_text(at)
+        assert "Network health summary" in text and "Open incidents: 1 combined" in text
+        assert "Most severe unresolved alerts" in text

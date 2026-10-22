@@ -76,3 +76,12 @@ def recent_incidents(conn: sqlite3.Connection, limit: int = 5) -> List[sqlite3.R
         "FROM incidents ORDER BY created_at DESC, id DESC LIMIT ?",
         (limit,),
     ).fetchall()
+
+
+def top_open_alerts(conn: sqlite3.Connection, limit: int = 6) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT id, alert_type, severity, category, status, created_at, model_version FROM alerts "
+        "WHERE status IN ('open', 'acknowledged') ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
+        "WHEN 'medium' THEN 2 ELSE 3 END, created_at DESC, id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
