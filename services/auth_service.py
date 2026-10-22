@@ -263,3 +263,49 @@ def record_logout(principal: Principal, reason: str = "user") -> None:
     audit_service.record_standalone(
         user_id=principal.user_id, action="auth.logout", outcome="success", details={"reason": reason}
     )
+
+
+def change_password(principal: Principal, current_password: str, new_password: str) -> None:
+    """Self-service change. Wrong current passwords count toward the same lockout as sign-in."""
+    now = utc_now()
+    with database_service.session() as conn:
+        row = user_repository.get_by_id(conn, principal.user_id)
+        locked = row is not None and is_locked_out(conn, row["email"], now)
+    if row is None or not row["is_active"]:
+        raise AuthError("Account not found or inactive.")
+    if locked:
+        raise AccountLockedError(LOCKED_LOGIN_ERROR)
+    if not _verify(row["password_hash"], current_password or ""):
+        with database_service.session(write=True) as conn:
+            login_attempt_repository.record_attempt(conn, row["email"], False, to_iso(now))
+            audit_service.record(conn, user_id=row["id"], action="auth.change_password", outcome="failure",
+                                 details={"reason": "bad_current_password"})
+        raise AuthError("The current password is incorrect.")
+    errors = password_policy_errors(new_password)
+    if errors:
+        raise AuthError("New password must contain " + ", ".join(errors) + ".")
+    if new_password == current_password:
+        raise AuthError("Choose a password different from the current one.")
+    new_hash = hash_password(new_password)
+    with database_service.session(write=True) as conn:
+        user_repository.update_password_hash(conn, row["id"], new_hash, to_iso(now))
+        audit_service.record(conn, user_id=row["id"], action="auth.change_password")
+
+
+def reset_password_cli(email: str, new_password: str) -> User:
+    """Operator recovery from the server's command line (no web route). Clears the lockout."""
+    email = normalize_email(email)
+    errors = password_policy_errors(new_password)
+    if errors:
+        raise AuthError("Password must contain " + ", ".join(errors) + ".")
+    new_hash = hash_password(new_password)
+    now = to_iso(utc_now())
+    with database_service.session(write=True) as conn:
+        row = user_repository.get_by_email(conn, email)
+        if row is None:
+            raise AuthError("No account has that email.")
+        user_repository.update_password_hash(conn, row["id"], new_hash, now)
+        login_attempt_repository.record_attempt(conn, email, True, now)  # a success resets the failure count
+        audit_service.record(conn, user_id=row["id"], action="cli.reset_password")
+        fresh = user_repository.get_by_id(conn, row["id"])
+    return User.from_row(fresh)

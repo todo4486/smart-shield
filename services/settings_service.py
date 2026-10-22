@@ -170,3 +170,59 @@ def update_monitoring_settings(principal: Principal, new: MonitoringSettings) ->
         audit_service.record(conn, user_id=principal.user_id, action="settings.update",
                              details={"key": MONITORING_KEY, "before": before, "after": value})
     return validated
+
+
+# ------------------------------------------------------------- retention
+
+MIN_AUDIT_RETENTION_DAYS = 365
+
+
+@dataclass(frozen=True)
+class RetentionSettings:
+    """How long data is kept. Off by default: nothing is ever deleted until an admin enables it."""
+
+    enabled: bool = False
+    metrics_days: int = 365
+    flows_days: int = 90
+    predictions_days: int = 365
+    closed_alerts_days: int = 365
+    closed_incidents_days: int = 365
+    login_attempts_days: int = 30
+    audit_days: int = 730
+
+    def validate(self) -> "RetentionSettings":
+        values = asdict(self)
+        for key, days in values.items():
+            if key != "enabled" and not 1 <= int(days) <= 3650:
+                raise SettingsError(f"{key.replace('_', ' ')} must be between 1 and 3650 days.")
+        if int(self.audit_days) < MIN_AUDIT_RETENTION_DAYS:
+            raise SettingsError(f"Audit logs must be kept for at least {MIN_AUDIT_RETENTION_DAYS} days.")
+        return RetentionSettings(bool(self.enabled), *(int(values[k]) for k in list(values)[1:]))
+
+
+RETENTION_KEY = "retention.settings"
+
+
+def get_retention_settings() -> RetentionSettings:
+    with database_service.session() as conn:
+        row = conn.execute("SELECT value_json FROM app_settings WHERE key = ?", (RETENTION_KEY,)).fetchone()
+    if row is None:
+        return RetentionSettings()
+    stored = json.loads(row["value_json"])
+    return RetentionSettings(**{k: v for k, v in stored.items() if k in RetentionSettings.__dataclass_fields__}).validate()
+
+
+def update_retention_settings(principal: Principal, new: RetentionSettings) -> RetentionSettings:
+    require_permission(principal, Permission.MANAGE_SETTINGS, action="settings.update", details={"key": RETENTION_KEY})
+    validated = new.validate()
+    before = asdict(get_retention_settings())
+    with database_service.session(write=True) as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value_json, updated_at, updated_by) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at, "
+            "updated_by = excluded.updated_by",
+            (RETENTION_KEY, json.dumps(asdict(validated), sort_keys=True), utc_now_iso(), principal.user_id),
+        )
+        audit_service.record(conn, user_id=principal.user_id, action="settings.update",
+                             details={"key": RETENTION_KEY, "before": before, "after": asdict(validated)})
+    return validated

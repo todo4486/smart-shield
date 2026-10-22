@@ -8,11 +8,14 @@ font = "sans serif"
 
 [client]
 toolbarMode = "minimal"
-showErrorDetails = false
+# "none": users see a generic message; details go only to the server log (no paths or tracebacks).
+showErrorDetails = "none"
 
 [server]
 runOnSave = false
 maxUploadSize = 512
+enableXsrfProtection = true
+enableCORS = true
 
 [browser]
 gatherUsageStats = false

@@ -2,6 +2,8 @@
 
     python -m scripts.manage init-db
     python -m scripts.manage create-admin [--name NAME] [--email EMAIL]
+    python -m scripts.manage reset-password --email EMAIL
+    python -m scripts.manage apply-retention [--dry-run]
     python -m scripts.manage dump-schema [--check]
 
 Passwords are only read interactively (never from arguments, which end up in
@@ -60,6 +62,40 @@ def cmd_create_admin(
     return 0
 
 
+def cmd_reset_password(
+    args: argparse.Namespace,
+    *,
+    secret: Callable[[str], str] = getpass.getpass,
+) -> int:
+    print("Password must be 10-128 characters with an uppercase letter, a lowercase letter and a digit.")
+    password = secret("New password: ")
+    if password != secret("Confirm password: "):
+        print("Passwords do not match.", file=sys.stderr)
+        return 1
+    try:
+        user = auth_service.reset_password_cli(args.email, password)
+    except auth_service.AuthError as exc:
+        print(f"Could not reset password: {exc}", file=sys.stderr)
+        return 1
+    print(f"Password reset for {user.email}; failed sign-in attempts were cleared.")
+    return 0
+
+
+def cmd_apply_retention(args: argparse.Namespace) -> int:
+    from services import retention_service
+
+    database_service.run_migrations()
+    try:
+        result = retention_service.run(dry_run=args.dry_run, actor_user_id=None, force=args.dry_run)
+    except retention_service.RetentionError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    verb = "Would delete" if args.dry_run else "Deleted"
+    for name, count in result.counts.items():
+        print(f"{verb} {count:,} {name.replace('_', ' ')} (older than {result.cutoffs[name][:10]})")
+    return 0
+
+
 def cmd_dump_schema(args: argparse.Namespace) -> int:
     generated = database_service.generate_schema_sql()
     if args.check:
@@ -82,6 +118,12 @@ def build_parser() -> argparse.ArgumentParser:
     admin.add_argument("--name")
     admin.add_argument("--email")
     admin.set_defaults(func=cmd_create_admin)
+    reset = sub.add_parser("reset-password", help="reset a user's password (operator recovery)")
+    reset.add_argument("--email", required=True)
+    reset.set_defaults(func=cmd_reset_password)
+    retention = sub.add_parser("apply-retention", help="delete data older than the configured retention ages")
+    retention.add_argument("--dry-run", action="store_true", help="only count what would be deleted")
+    retention.set_defaults(func=cmd_apply_retention)
     dump = sub.add_parser("dump-schema", help="regenerate database/schema.sql from the migrations")
     dump.add_argument("--check", action="store_true", help="exit 1 if schema.sql is out of date")
     dump.set_defaults(func=cmd_dump_schema)

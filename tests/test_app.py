@@ -261,3 +261,17 @@ def test_live_monitoring_panel_and_monitoring_settings(admin_user, analyst_user)
     assert not at.exception and "Only administrators can start or stop live capture." in _all_text(at)
     at = _run_page(admin_user, "views/settings.py")
     assert not at.exception and any(m.label.startswith("Interfaces authorised") for m in at.multiselect)
+
+
+def test_reports_account_and_retention_pages(admin_user, analyst_user):
+    at = _run_page(analyst_user, "views/reports.py")
+    assert not at.exception and "Choose a period and generate a report" in _all_text(at)
+    generate = next(b for b in at.button if b.label == "Generate report")
+    generate.click().run()
+    assert not at.exception, at.exception
+    assert "Every figure comes from data stored in Smart Shield" in _all_text(at)
+    at = _run_page(analyst_user, "views/account.py")
+    assert not at.exception and "Change password" in _all_text(at)
+    at = _run_page(admin_user, "views/administration.py")
+    assert not at.exception, at.exception
+    assert "Retention is **off by default**" in _all_text(at)

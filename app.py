@@ -63,6 +63,7 @@ else:
         "Workspace": [
             st.Page("views/reports.py", title="Reports", icon=":material/description:"),
             st.Page("views/settings.py", title="Settings", icon=":material/settings:"),
+            st.Page("views/account.py", title="My account", icon=":material/person:"),
         ],
     }
     if principal.has(Permission.MANAGE_USERS):
