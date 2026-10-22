@@ -10,6 +10,7 @@ When you import them, keep "SAMPLE (synthetic)" in the source or dataset name so
 | `SAMPLE_telemetry_with_errors_synthetic.csv` | **Import telemetry** | Each row demonstrates a validation rule; see below |
 | `SAMPLE_intrusion_train_day_synthetic.csv` | **Register intrusion dataset**, then Smart Shield models → Train | See the notes below |
 | `SAMPLE_intrusion_test_day_synthetic.csv` | **Register intrusion dataset**, then Security Center → Run detection | A different "day" the model never trained on: about 92% recall at about 1% false positives |
+| `SAMPLE_intrusion_attack_during_peak_synthetic.csv` | **Register intrusion dataset**, then Security Center → Run detection (UTC offset `0`) | A DDoS burst during the telemetry file's congested peak; see the walkthrough below |
 
 **`SAMPLE_telemetry_7days_synthetic.csv`**
 
@@ -32,3 +33,13 @@ When you import them, keep "SAMPLE (synthetic)" in the source or dataset name so
 
 - Telemetry: the default options work, because timestamps already end in `Z`.
 - Intrusion files: dates are day-first. Use a UTC offset of `-3` if you want CIC-IDS2017-style local time; `0` also works.
+
+## Full demo walkthrough (about 5 minutes)
+
+1. **Import telemetry:** `SAMPLE_telemetry_7days_synthetic.csv` (ML Laboratory → Data sources).
+2. **Register the training data:** `SAMPLE_intrusion_train_day_synthetic.csv`. Train it under Smart Shield models; as admin, tick *Activate*.
+3. **Register the attack data:** `SAMPLE_intrusion_attack_during_peak_synthetic.csv`, then run detection on it in the Security Center with UTC offset `0`. Expect a critical DDoS alert flagged as a potential DDoS, plus other alerts.
+4. **Train the forecaster:** under PredictNet models, choose the telemetry session, interface `campus-uplink` and horizons 5/15/60 min, and activate it.
+5. **Forecast:** in the PredictNet Congestion Center, choose `campus-uplink` and click *Generate forecast*. Expect high or critical risk and congestion alerts.
+6. **Correlate:** in the Incident Center, click *Correlate unresolved alerts*. You get one **Security + congestion** incident, because the attack and the congestion overlap on 17 Sep 2026, 13:30–15:00 UTC.
+7. **Try the counter-example:** detection on `SAMPLE_intrusion_test_day_synthetic.csv` (2017) does *not* overlap. Its alerts form a separate security incident, and congestion alone stays a performance warning.

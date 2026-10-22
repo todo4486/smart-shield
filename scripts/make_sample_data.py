@@ -107,7 +107,7 @@ PROFILES = {
 }
 
 
-def intrusion_frame(n: int, start: str, seed: int, mix: dict) -> pd.DataFrame:
+def intrusion_frame(n: int, start: str, seed: int, mix: dict, span_hours: float = 8) -> pd.DataFrame:
     """CIC-IDS2017-shaped flows with overlapping class distributions and 1% label noise,
     so models score well but not perfectly."""
     rng = np.random.default_rng(seed)
@@ -140,7 +140,7 @@ def intrusion_frame(n: int, start: str, seed: int, mix: dict) -> pd.DataFrame:
                             "192.168.10.50")
     ports = np.where(labels == "PortScan", rng.integers(1, 1024, n),
                      np.where(labels == "FTP-Patator", 21, rng.choice([80, 443, 53], n)))
-    stamps = pd.Timestamp(start) + pd.to_timedelta(np.sort(rng.uniform(0, 8 * 3600, n)), unit="s")
+    stamps = pd.Timestamp(start) + pd.to_timedelta(np.sort(rng.uniform(0, span_hours * 3600, n)), unit="s")
     observed = labels.copy()
     noise = rng.random(n) < 0.01
     observed[noise] = np.where(observed[noise] == "BENIGN", "DDoS", "BENIGN")
@@ -187,6 +187,10 @@ FILES = {
     "SAMPLE_intrusion_test_day_synthetic.csv": lambda: intrusion_frame(
         6_000, "2017-07-05 08:00:00", 202,
         {"BENIGN": 0.70, "DDoS": 0.10, "DoS Hulk": 0.08, "PortScan": 0.09, "FTP-Patator": 0.03}),
+    # A DDoS burst during the telemetry file's congested peak (17 Sep 2026, 13:30-15:00 UTC), so detection plus a
+    # PredictNet forecast produce a "Security + congestion" incident. Timestamps are already UTC (offset 0).
+    "SAMPLE_intrusion_attack_during_peak_synthetic.csv": lambda: intrusion_frame(
+        6_000, "2026-09-17 13:30:00", 303, {"BENIGN": 0.45, "DDoS": 0.45, "PortScan": 0.10}, span_hours=1.5),
 }
 
 
