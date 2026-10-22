@@ -242,3 +242,22 @@ def test_incident_center_and_overview_summary(admin_user, analyst_user):
         text = _all_text(at)
         assert "Network health summary" in text and "Open incidents: 1 combined" in text
         assert "Most severe unresolved alerts" in text
+
+
+def test_live_monitoring_panel_and_monitoring_settings(admin_user, analyst_user):
+    from services import settings_service
+
+    at = _run_page(admin_user, "views/live_monitoring.py")
+    assert not at.exception, at.exception
+    text = _all_text(at)
+    assert "Live capture (passive)" in text and "No network interface is authorised" in text
+    assert "never sends, injects, scans or blocks" in text
+    settings_service.update_monitoring_settings(admin_user.to_principal(),
+                                                settings_service.MonitoringSettings(("lo0", "lo")))
+    at = _run_page(admin_user, "views/live_monitoring.py")
+    assert not at.exception
+    assert any(b.label == "Start capture" for b in at.button)
+    at = _run_page(analyst_user, "views/live_monitoring.py")
+    assert not at.exception and "Only administrators can start or stop live capture." in _all_text(at)
+    at = _run_page(admin_user, "views/settings.py")
+    assert not at.exception and any(m.label.startswith("Interfaces authorised") for m in at.multiselect)

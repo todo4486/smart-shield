@@ -46,8 +46,8 @@ if not data.has_any_data:
          "ML Laboratory to populate traffic rates and throughput.", "Available now", True),
         ("Train models", "Train the Smart Shield intrusion detector and the PredictNet forecaster in the ML "
          "Laboratory, with evaluation metrics stored in the model registry.", "Available now", True),
-        ("Monitor live traffic", "Start passive monitoring on an authorized interface to record measured "
-         "throughput, flows and alerts.", "Arrives in Phase 7", False),
+        ("Monitor live traffic", "An administrator authorises an interface in Settings, then starts passive "
+         "monitoring in Live Monitoring to record measured throughput, flows and alerts.", "Available now", True),
     ]
     if principal.has(Permission.MANAGE_USERS):
         steps.insert(0, ("Set up your team", "Invite colleagues to create accounts, then manage their "

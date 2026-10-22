@@ -3,7 +3,7 @@
 An AI-powered network intelligence platform for intrusion detection, congestion prediction and
 intelligent bandwidth management (final-year CS project). Requirements: `docs/SPEC.md`. Project rules: `CLAUDE.md`.
 
-**Status: Phase 6 (Integration).** Working now:
+**Status: Phase 7 (Live Monitoring).** Working now:
 
 - Phase 1: authentication, database, shared UI, the Overview dashboard and Administration.
 - Historical telemetry import and labelled intrusion-dataset registration, in **ML Laboratory → Data sources**.
@@ -28,6 +28,15 @@ intelligent bandwidth management (final-year CS project). Requirements: `docs/SP
     security) with measured traffic changes, model outputs, rationale and investigation steps.
   - Congestion alone is never treated as an attack.
   - Incident triage with notes, and a unified view of all alerts.
+- **Live Monitoring**:
+  - Passive capture on interfaces an admin authorises in Settings. There are two modes: psutil interface counters
+    (no special permission needed), and Scapy packet capture with flow extraction.
+  - Flows are 5-tuple keyed, with a 15 s idle timeout and a 120 s active timeout.
+  - Capture runs in a separate worker process with a bounded queue and batched writes. A singleton manager
+    prevents duplicate workers. States are persisted, and live sessions orphaned by a restart are closed.
+  - Live detection runs only with a live-compatible model; any other model is rejected and features are never
+    zero-filled.
+  - Latency is measured only if a target is configured.
 - **Overview**: a network health summary built from persisted data, the most severe unresolved alerts from both
   engines, and a chart of the newest 24 hours of stored measurements.
 
@@ -94,7 +103,12 @@ app.py (router) → views/ (pages) → components/ (UI) → services/ (logic + a
 * Live packet capture is not implemented yet (Phase 7). Monitoring sessions come from imports and datasets.
 * Models are trained in the Streamlit process. A 200k-row Smart Shield run takes about a minute on a laptop.
   Training and scoring row limits keep memory bounded.
-* Forecasts come from imported historical telemetry; live forecasting follows live capture in Phase 7.
+* Packet capture needs privileges: root or ChmodBPF on macOS, root or CAP_NET_RAW on Linux, and Npcap plus
+  administrator rights on Windows. Without them only counter mode is offered, with the reason shown, and imported
+  data keeps working.
+* The live flow features approximate CICFlowMeter's definitions from packet headers. Live detection accuracy can
+  differ from dataset accuracy.
+* NIC drop counters are not network packet loss, so packet loss stays unavailable in live mode.
 * Correlation of dataset-based Smart Shield alerts with congestion is by time only, because those alerts do not
   identify a network interface.
 * Per-class bandwidth demand is entered or scaled from total throughput, because no data source measures it per class yet.

@@ -1,11 +1,10 @@
-"""Network monitoring: session history and the telemetry each session recorded.
-Live capture controls arrive in Phase 7."""
+"""Network monitoring: passive live capture, session history and the telemetry each session recorded."""
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
-from components import charts
+from components import charts, live_capture
 from components.guard import require_principal
 from components.ui import (
     SOURCE_LABELS, empty_state, format_bits_rate, format_bytes_rate, format_timestamp, kpi_tile, page_header, section_label,
@@ -21,18 +20,15 @@ page_header(
     "complete it is, and where values were derived rather than measured.",
     eyebrow="Monitor",
 )
-st.info(
-    "Live packet capture on an authorized interface arrives in **Phase 7**. Until then, sessions come from "
-    "imported historical telemetry and registered datasets.",
-    icon=":material/info:",
-)
+live_capture.render(principal)
+st.write("")
 
 sessions = monitoring_service.list_sessions(principal)
 if not sessions:
     empty_state(
         "📡", "No monitoring sessions yet",
-        "Import a historical telemetry CSV or register a timestamped flow dataset in the ML Laboratory. "
-        "Each import becomes a session you can explore here.",
+        "Start a live capture above, import a historical telemetry CSV, or register a timestamped flow dataset in "
+        "the ML Laboratory. Each becomes a session you can explore here.",
     )
     st.page_link("views/ml_lab.py", label="Go to ML Laboratory → Data sources", icon=":material/upload:")
     st.stop()

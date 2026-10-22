@@ -5,7 +5,7 @@ import streamlit as st
 
 from components.guard import require_principal
 from components.ui import page_header, planned_notice, provenance_chip
-from services import settings_service
+from services import interface_counters, settings_service
 from services.authorization import Permission, PermissionDenied
 from services.settings_service import PredictNetSettings, SettingsError
 
@@ -59,7 +59,36 @@ if saved:
         st.rerun()
 
 st.write("")
+st.subheader("Monitoring")
+monitoring = settings_service.get_monitoring_settings()
+detected = [i["name"] for i in interface_counters.list_interfaces()]
+with st.form("monitoring_settings", border=True):
+    allowed = st.multiselect(
+        "Interfaces authorised for live monitoring", sorted(set(detected) | set(monitoring.allowed_interfaces)),
+        default=list(monitoring.allowed_interfaces), disabled=not can_edit,
+        help="Nothing is authorised by default. Only authorise networks you are permitted to observe.")
+    c1, c2, c3 = st.columns(3)
+    latency_target = c1.text_input("Latency target (host:port, optional)", value=monitoring.latency_target,
+                                   disabled=not can_edit,
+                                   help="If set, latency is measured as TCP connect time to this one target each "
+                                        "sample. If empty, latency is shown as unavailable.")
+    interval = c2.number_input("Default counter interval (s)", 1, 60, monitoring.default_interval_seconds,
+                               disabled=not can_edit)
+    max_flows = c3.number_input("Max flows stored per session", 1_000, 1_000_000, monitoring.max_flows_per_session,
+                                step=1_000, disabled=not can_edit)
+    saved_monitoring = st.form_submit_button("Save monitoring settings", type="primary", disabled=not can_edit)
+if saved_monitoring:
+    try:
+        settings_service.update_monitoring_settings(principal, settings_service.MonitoringSettings(
+            tuple(allowed), latency_target, int(interval), int(max_flows)))
+    except (SettingsError, PermissionDenied) as exc:
+        st.error(str(exc))
+    else:
+        st.toast("Monitoring settings saved.")
+        st.rerun()
+
+st.write("")
 st.caption("Link capacity and traffic classes are configured per policy under **Bandwidth Management**. The "
            "traffic-shaping backend is configured only through `.env` on the server and is off by default.")
 planned_notice("Phase 8", "More settings", "Further configuration arrives with the features that use it.",
-               ["Data retention", "Live-monitoring interface allow-list (Phase 7)"])
+               ["Data retention"])

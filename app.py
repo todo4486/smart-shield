@@ -13,7 +13,7 @@ import streamlit as st
 from components.sidebar import render_logo, render_sidebar
 from components.theme import inject_css, register_plotly_template
 from config import get_settings
-from services import database_service, session_service
+from services import database_service, monitoring_service, session_service
 from services.authorization import Permission
 
 st.set_page_config(
@@ -28,6 +28,8 @@ st.set_page_config(
 def _prepare_database(db_path: str) -> str:
     """Run pending migrations once per process and database file."""
     database_service.run_migrations(db_path)
+    # No capture worker survives a server restart, so close live sessions left open by a previous process.
+    monitoring_service.recover_interrupted_sessions()
     return db_path
 
 

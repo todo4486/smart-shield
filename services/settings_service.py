@@ -107,3 +107,66 @@ def risk_level(utilization: float, settings: PredictNetSettings) -> str:
 
 
 RISK_ORDER: List[str] = ["normal", "elevated", "high", "critical"]
+
+
+# ------------------------------------------------------------ monitoring
+
+@dataclass(frozen=True)
+class MonitoringSettings:
+    """Which interfaces may be monitored, and optional measurements. Nothing is allowed by default."""
+
+    allowed_interfaces: tuple = ()
+    latency_target: str = ""  # "host:port" for a TCP connect-time probe; empty = latency unavailable
+    default_interval_seconds: int = 5
+    max_flows_per_session: int = 100_000
+
+    def validate(self) -> "MonitoringSettings":
+        import re
+
+        from services.interface_counters import validate_latency_target
+
+        names = tuple(sorted({str(i).strip() for i in self.allowed_interfaces if str(i).strip()}))
+        if any(not re.match(r"^[A-Za-z0-9_.:\-]{1,32}$", n) for n in names):
+            raise SettingsError("Interface names contain unsupported characters.")
+        try:
+            validate_latency_target(self.latency_target or None)
+        except ValueError as exc:
+            raise SettingsError(str(exc)) from exc
+        if not 1 <= int(self.default_interval_seconds) <= 60:
+            raise SettingsError("Sampling interval must be between 1 and 60 seconds.")
+        if not 1_000 <= int(self.max_flows_per_session) <= 1_000_000:
+            raise SettingsError("Flow storage limit must be between 1,000 and 1,000,000 per session.")
+        return MonitoringSettings(names, (self.latency_target or "").strip(), int(self.default_interval_seconds),
+                                  int(self.max_flows_per_session))
+
+
+MONITORING_KEY = "monitoring.settings"
+
+
+def get_monitoring_settings() -> MonitoringSettings:
+    with database_service.session() as conn:
+        row = conn.execute("SELECT value_json FROM app_settings WHERE key = ?", (MONITORING_KEY,)).fetchone()
+    if row is None:
+        return MonitoringSettings()
+    stored = json.loads(row["value_json"])
+    stored["allowed_interfaces"] = tuple(stored.get("allowed_interfaces", ()))
+    return MonitoringSettings(**{k: v for k, v in stored.items() if k in MonitoringSettings.__dataclass_fields__}).validate()
+
+
+def update_monitoring_settings(principal: Principal, new: MonitoringSettings) -> MonitoringSettings:
+    require_permission(principal, Permission.MANAGE_SETTINGS, action="settings.update", details={"key": MONITORING_KEY})
+    validated = new.validate()
+    before = asdict(get_monitoring_settings())
+    value = asdict(validated)
+    value["allowed_interfaces"] = list(validated.allowed_interfaces)
+    before["allowed_interfaces"] = list(before["allowed_interfaces"])
+    with database_service.session(write=True) as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value_json, updated_at, updated_by) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at, "
+            "updated_by = excluded.updated_by",
+            (MONITORING_KEY, json.dumps(value, sort_keys=True), utc_now_iso(), principal.user_id),
+        )
+        audit_service.record(conn, user_id=principal.user_id, action="settings.update",
+                             details={"key": MONITORING_KEY, "before": before, "after": value})
+    return validated

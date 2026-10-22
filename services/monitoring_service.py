@@ -148,3 +148,16 @@ def delete_session(principal: Principal, session_id: int) -> None:
             details={"session_id": session_id, "source_type": row["source_type"],
                      "metrics_deleted": metric_count, "flows_deleted": flow_count},
         )
+
+
+def recover_interrupted_sessions() -> int:
+    """Live sessions left STARTING/RUNNING/STOPPING by a previous app process cannot still be running."""
+    with database_service.session(write=True) as conn:
+        rows = conn.execute(
+            "SELECT id, status FROM monitoring_sessions WHERE source_type = 'live_capture' "
+            "AND status IN ('STARTING', 'RUNNING', 'STOPPING')"
+        ).fetchall()
+        for row in rows:
+            transition(conn, row["id"], SessionState.ERROR,
+                       "The application stopped while this capture was active; the session was closed on restart.")
+    return len(rows)
