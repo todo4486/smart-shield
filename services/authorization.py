@@ -22,6 +22,7 @@ class Permission(str, Enum):
     VIEW_DASHBOARD = "view_dashboard"
     VIEW_ALERTS = "view_alerts"
     TRIAGE_ALERTS = "triage_alerts"
+    RUN_DETECTION = "run_detection"
     MANAGE_DATASETS = "manage_datasets"
     TRAIN_MODELS = "train_models"
     ACTIVATE_MODELS = "activate_models"
@@ -39,6 +40,7 @@ _ANALYST: FrozenSet[Permission] = frozenset(
         Permission.VIEW_DASHBOARD,
         Permission.VIEW_ALERTS,
         Permission.TRIAGE_ALERTS,
+        Permission.RUN_DETECTION,
         Permission.MANAGE_DATASETS,
         Permission.TRAIN_MODELS,
         Permission.VIEW_REPORTS,

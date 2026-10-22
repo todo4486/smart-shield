@@ -70,3 +70,21 @@ def coverage_bars(coverage: Dict[str, float], *, title: str) -> None:
     fig.update_layout(title=title, xaxis=dict(range=[0, 1.08], tickformat=".0%"), showlegend=False)
     fig.update_yaxes(autorange="reversed")
     st.plotly_chart(apply_chart_theme(fig, height=max(260, 34 * len(items) + 90)), theme=None)
+
+
+def confusion_heatmap(matrix: List[List[int]], labels: List[str], *, title: str, height: int = 360) -> None:
+    """Rows = actual, columns = predicted. Cell text shows counts; colour shows the row share."""
+    import numpy as np
+
+    values = np.asarray(matrix, dtype=float)
+    row_totals = values.sum(axis=1, keepdims=True)
+    shares = np.divide(values, row_totals, out=np.zeros_like(values), where=row_totals > 0)
+    fig = go.Figure(go.Heatmap(
+        z=shares, x=labels, y=labels, text=values.astype(int), texttemplate="%{text:,}",
+        colorscale=[[0, COLORS["card"]], [1, COLORS["accent"]]], zmin=0, zmax=1, showscale=False,
+        hovertemplate="Actual %{y}<br>Predicted %{x}<br>%{text:,} rows (%{z:.1%} of actual)<extra></extra>",
+    ))
+    fig.update_layout(title=title, xaxis_title="Predicted", yaxis_title="Actual")
+    fig.update_yaxes(autorange="reversed", type="category")
+    fig.update_xaxes(type="category")
+    st.plotly_chart(apply_chart_theme(fig, height=height), theme=None)

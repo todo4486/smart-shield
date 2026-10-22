@@ -30,6 +30,7 @@ class ConfigError(ValueError):
 class Settings:
     db_path: Path
     dataset_dir: Path
+    artifact_dir: Path
     session_idle_minutes: int
     lockout_max_attempts: int
     lockout_minutes: int
@@ -77,6 +78,7 @@ def get_settings() -> Settings:
     return Settings(
         db_path=_path_setting("SMART_SHIELD_DB_PATH", "data/smart_shield.db"),
         dataset_dir=_path_setting("SMART_SHIELD_DATASET_DIR", "data/datasets"),
+        artifact_dir=_path_setting("SMART_SHIELD_ARTIFACT_DIR", "artifacts"),
         session_idle_minutes=_int_setting("SMART_SHIELD_SESSION_IDLE_MINUTES", 30, 1, 24 * 60),
         lockout_max_attempts=_int_setting("SMART_SHIELD_LOCKOUT_MAX_ATTEMPTS", 5, 1, 100),
         lockout_minutes=_int_setting("SMART_SHIELD_LOCKOUT_MINUTES", 15, 1, 24 * 60),

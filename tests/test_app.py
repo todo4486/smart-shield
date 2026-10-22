@@ -141,3 +141,30 @@ def test_live_monitoring_renders_imported_session(analyst_user, admin_user):
     assert "No network data yet" not in _all_text(at)
     at = _run_page(analyst_user, "views/ml_lab.py")
     assert not at.exception
+
+
+def test_security_center_and_ml_lab_render_with_models_and_alerts(admin_user, analyst_user):
+    from services import dataset_service, intrusion_inference_service, intrusion_training_service
+    from services.intrusion_inference_service import DetectionOptions
+    from services.intrusion_training_service import IntrusionTrainingOptions
+    from tests.synthetic import cic_like_frame, to_cic_csv
+
+    admin = admin_user.to_principal()
+    at = _run_page(analyst_user, "views/security_center.py")
+    assert not at.exception
+    assert "No intrusion classifier is active yet" in _all_text(at)
+
+    train_id = dataset_service.register_intrusion_dataset(admin, to_cic_csv(cic_like_frame(1500)), "a.csv", "a").dataset_id
+    intrusion_training_service.train_intrusion_models(
+        admin, IntrusionTrainingOptions(dataset_ids=(train_id,), n_estimators=10, activate=True))
+    score_id = dataset_service.register_intrusion_dataset(
+        admin, to_cic_csv(cic_like_frame(600, seed=5)), "b.csv", "b").dataset_id
+    intrusion_inference_service.run_detection(admin, DetectionOptions(dataset_id=score_id))
+
+    for user in (analyst_user, admin_user):
+        at = _run_page(user, "views/security_center.py")
+        assert not at.exception, at.exception
+        text = _all_text(at)
+        assert "Evidence" in text and "One alert per detected category" in text
+        at = _run_page(user, "views/ml_lab.py")
+        assert not at.exception, at.exception

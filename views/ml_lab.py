@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from components import charts
+from components import charts, smart_shield_lab
 from components.guard import require_principal
 from components.ui import format_timestamp, page_header, planned_notice, section_label
 from services import dataset_service, telemetry_service
@@ -260,14 +260,7 @@ with data_tab:
                                 st.rerun()
 
 with shield_tab:
-    planned_notice(
-        "Phase 3", "Smart Shield model workspace",
-        "Train and evaluate the intrusion detector on a registered dataset. Nothing here is simulated in the meantime.",
-        ["Random Forest benign-vs-attack classifier and optional multiclass model",
-         "Isolation Forest anomaly detector fit on benign training data",
-         "Precision, recall, F1, confusion matrix, per-class metrics and false-positive rate",
-         "Versioned, SHA-256-verified model registry"],
-    )
+    smart_shield_lab.render(principal)
 
 with predict_tab:
     planned_notice(

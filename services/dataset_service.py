@@ -114,7 +114,7 @@ class DatasetSummary:
 
 # --------------------------------------------------------------- helpers
 
-def _unique_normalized(columns: List[str]) -> Dict[str, str]:
+def unique_normalized_columns(columns: List[str]) -> Dict[str, str]:
     mapping: Dict[str, str] = {}
     used: Dict[str, int] = {}
     for original in columns:
@@ -252,7 +252,7 @@ def _register(principal: Principal, data: bytes, filename: str, name: str,
         raise DatasetError(f"The file could not be read as CSV: {exc}") from exc
 
     original_columns = [str(c) for c in first.columns]
-    mapping = _unique_normalized(original_columns)
+    mapping = unique_normalized_columns(original_columns)
     columns = list(mapping.values())
     if LABEL_COLUMN not in columns:
         raise DatasetError("No 'Label' column found. Intrusion datasets must be labelled (e.g. BENIGN, DDoS).")

@@ -3,11 +3,14 @@
 An AI-powered network intelligence platform for intrusion detection, congestion prediction and
 intelligent bandwidth management (final-year CS project). Requirements: `docs/SPEC.md`. Project rules: `CLAUDE.md`.
 
-**Status: Phase 2 (shared telemetry).** Working now:
+**Status: Phase 3 (Smart Shield).** Working now:
 
 - Phase 1: authentication, database, shared UI, the Overview dashboard and Administration.
 - Historical telemetry import and labelled intrusion-dataset registration, in **ML Laboratory → Data sources**.
 - Monitoring sessions, with telemetry and flow charts, in **Live Monitoring**.
+- Smart Shield training and evaluation, in **ML Laboratory → Smart Shield models**. It trains a Random Forest, an
+  Isolation Forest and an attack-type model, and keeps them in a SHA-256-verified registry.
+- Detection runs, grouped and deduplicated alerts, and alert triage, in the **Smart Shield Security Center**.
 
 Pages for later phases show a "Planned for Phase X" notice. Nothing is simulated.
 File formats are described in `docs/TELEMETRY_SCHEMA.md`.

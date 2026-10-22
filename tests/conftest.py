@@ -13,6 +13,7 @@ def temp_db(tmp_path, monkeypatch):
     db_path = tmp_path / "test_smart_shield.db"
     monkeypatch.setenv("SMART_SHIELD_DB_PATH", str(db_path))
     monkeypatch.setenv("SMART_SHIELD_DATASET_DIR", str(tmp_path / "datasets"))
+    monkeypatch.setenv("SMART_SHIELD_ARTIFACT_DIR", str(tmp_path / "artifacts"))
     monkeypatch.setenv("SMART_SHIELD_LOCKOUT_MAX_ATTEMPTS", "5")
     monkeypatch.setenv("SMART_SHIELD_LOCKOUT_MINUTES", "15")
     monkeypatch.setenv("SMART_SHIELD_SESSION_IDLE_MINUTES", "30")
