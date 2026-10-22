@@ -168,3 +168,37 @@ def test_security_center_and_ml_lab_render_with_models_and_alerts(admin_user, an
         assert "Evidence" in text and "One alert per detected category" in text
         at = _run_page(user, "views/ml_lab.py")
         assert not at.exception, at.exception
+
+
+def test_predictnet_and_settings_pages(admin_user, analyst_user):
+    from services import congestion_training_service, telemetry_service
+    from services.congestion_training_service import ForecastTrainingOptions
+    from services.telemetry_service import TelemetryImportOptions
+    from tests.synthetic import telemetry_csv
+
+    at = _run_page(analyst_user, "views/predictnet.py")
+    assert not at.exception and "No telemetry to forecast yet" in _all_text(at)
+
+    admin = admin_user.to_principal()
+    session_id = telemetry_service.import_telemetry_csv(
+        admin, telemetry_csv(days=2), "t.csv", TelemetryImportOptions(source_name="lab")).session_id
+    at = _run_page(analyst_user, "views/predictnet.py")
+    assert not at.exception and "No forecaster is active" in _all_text(at)
+
+    congestion_training_service.train_forecaster(admin, ForecastTrainingOptions(
+        session_id=session_id, interface_name="eth0", horizons_minutes=(5,), activate=True))
+    for user in (analyst_user, admin_user):
+        at = _run_page(user, "views/predictnet.py")
+        assert not at.exception, at.exception
+        generate = next(b for b in at.button if b.label.startswith("Generate forecast"))
+        generate.click().run()
+        assert not at.exception, at.exception
+        assert "last_forecast_run" in at.session_state
+        assert "Congestion risk:" in _all_text(at)
+        at = _run_page(user, "views/ml_lab.py")
+        assert not at.exception, at.exception
+
+    at = _run_page(analyst_user, "views/settings.py")
+    assert not at.exception and "Only administrators can change settings." in _all_text(at)
+    at = _run_page(admin_user, "views/settings.py")
+    assert not at.exception and "Only administrators" not in _all_text(at)

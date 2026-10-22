@@ -42,8 +42,8 @@ if not data.has_any_data:
     steps = [
         ("Import telemetry", "Upload historical network metrics or a labelled flow dataset (CSV) in the "
          "ML Laboratory to populate traffic rates and throughput.", "Available now", True),
-        ("Train models", "Train the Smart Shield intrusion detector and the PredictNet forecaster, "
-         "with evaluation metrics stored in the model registry.", "Arrives in Phases 3–4", False),
+        ("Train models", "Train the Smart Shield intrusion detector and the PredictNet forecaster in the ML "
+         "Laboratory, with evaluation metrics stored in the model registry.", "Available now", True),
         ("Monitor live traffic", "Start passive monitoring on an authorized interface to record measured "
          "throughput, flows and alerts.", "Arrives in Phase 7", False),
     ]

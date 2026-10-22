@@ -5,9 +5,9 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from components import charts, smart_shield_lab
+from components import charts, predictnet_lab, smart_shield_lab
 from components.guard import require_principal
-from components.ui import format_timestamp, page_header, planned_notice, section_label
+from components.ui import format_timestamp, page_header, section_label
 from services import dataset_service, telemetry_service
 from services.authorization import Permission, PermissionDenied
 from services.dataset_service import DatasetError, FlowImportOptions
@@ -263,9 +263,4 @@ with shield_tab:
     smart_shield_lab.render(principal)
 
 with predict_tab:
-    planned_notice(
-        "Phase 4", "PredictNet model workspace",
-        "Forecast utilization from imported telemetry with chronological splits and baseline comparison.",
-        ["Time-series inspection and minimum-history checks", "Last-value and moving-average baselines",
-         "Random Forest / HistGradientBoosting forecasters", "MAE, RMSE, R² and per-horizon error"],
-    )
+    predictnet_lab.render(principal)

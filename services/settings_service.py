@@ -1,0 +1,109 @@
+"""Validated application settings stored in app_settings (JSON values).
+
+Defaults are documented starting points, not universal network standards.
+Only administrators can change them; every change is audited with before/after.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, List
+
+from services import audit_service, database_service
+from services.authorization import Permission, Principal, require_permission
+from services.timeutil import utc_now_iso
+
+
+class SettingsError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class PredictNetSettings:
+    elevated_threshold: float = 0.60
+    high_threshold: float = 0.75
+    critical_threshold: float = 0.90
+    horizons_minutes: tuple = (1, 5, 15)
+    alert_cooldown_minutes: int = 30
+    rapid_rise_per_hour: float = 0.20  # utilization ratio gained per hour that counts as a rapid rise
+    sustained_high_samples: int = 3
+    min_training_samples: int = 200
+
+    def validate(self) -> "PredictNetSettings":
+        e, h, c = self.elevated_threshold, self.high_threshold, self.critical_threshold
+        if not 0 < e < h < c <= 1:
+            raise SettingsError("Thresholds must increase: 0 < elevated < high < critical ≤ 100%.")
+        horizons = tuple(sorted({int(m) for m in self.horizons_minutes}))
+        if not horizons or len(horizons) > 6 or not all(1 <= m <= 1440 for m in horizons):
+            raise SettingsError("Choose 1–6 forecast horizons between 1 and 1440 minutes.")
+        if not 1 <= int(self.alert_cooldown_minutes) <= 1440:
+            raise SettingsError("Alert cooldown must be between 1 and 1440 minutes.")
+        if not 0.01 <= float(self.rapid_rise_per_hour) <= 1:
+            raise SettingsError("Rapid-rise rate must be between 1% and 100% per hour.")
+        if not 1 <= int(self.sustained_high_samples) <= 100:
+            raise SettingsError("Sustained-high sample count must be between 1 and 100.")
+        if not 50 <= int(self.min_training_samples) <= 100_000:
+            raise SettingsError("Minimum training samples must be between 50 and 100,000.")
+        return PredictNetSettings(float(e), float(h), float(c), horizons, int(self.alert_cooldown_minutes),
+                                  float(self.rapid_rise_per_hour), int(self.sustained_high_samples),
+                                  int(self.min_training_samples))
+
+    def thresholds(self) -> Dict[str, float]:
+        return {"elevated": self.elevated_threshold, "high": self.high_threshold, "critical": self.critical_threshold}
+
+
+PREDICTNET_KEY = "predictnet.settings"
+
+
+def get_predictnet_settings() -> PredictNetSettings:
+    """Internal read used by services (no principal needed: settings are not sensitive)."""
+    with database_service.session() as conn:
+        row = conn.execute("SELECT value_json FROM app_settings WHERE key = ?", (PREDICTNET_KEY,)).fetchone()
+    if row is None:
+        return PredictNetSettings()
+    stored = json.loads(row["value_json"])
+    stored["horizons_minutes"] = tuple(stored.get("horizons_minutes", PredictNetSettings.horizons_minutes))
+    return PredictNetSettings(**{k: v for k, v in stored.items() if k in PredictNetSettings.__dataclass_fields__}).validate()
+
+
+def settings_source() -> str:
+    with database_service.session() as conn:
+        row = conn.execute("SELECT updated_at FROM app_settings WHERE key = ?", (PREDICTNET_KEY,)).fetchone()
+    return "configured" if row else "default"
+
+
+def update_predictnet_settings(principal: Principal, new: PredictNetSettings) -> PredictNetSettings:
+    require_permission(principal, Permission.MANAGE_SETTINGS, action="settings.update", details={"key": PREDICTNET_KEY})
+    validated = new.validate()
+    before = get_predictnet_settings()
+    value = asdict(validated)
+    value["horizons_minutes"] = list(validated.horizons_minutes)
+    with database_service.session(write=True) as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value_json, updated_at, updated_by) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at, "
+            "updated_by = excluded.updated_by",
+            (PREDICTNET_KEY, json.dumps(value, sort_keys=True), utc_now_iso(), principal.user_id),
+        )
+        audit_service.record(conn, user_id=principal.user_id, action="settings.update",
+                             details={"key": PREDICTNET_KEY, "before": _diffable(before), "after": value})
+    return validated
+
+
+def _diffable(settings: PredictNetSettings) -> Dict[str, Any]:
+    value = asdict(settings)
+    value["horizons_minutes"] = list(settings.horizons_minutes)
+    return value
+
+
+def risk_level(utilization: float, settings: PredictNetSettings) -> str:
+    if utilization >= settings.critical_threshold:
+        return "critical"
+    if utilization >= settings.high_threshold:
+        return "high"
+    if utilization >= settings.elevated_threshold:
+        return "elevated"
+    return "normal"
+
+
+RISK_ORDER: List[str] = ["normal", "elevated", "high", "critical"]

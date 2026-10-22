@@ -58,3 +58,28 @@ def to_cic_csv(frame: pd.DataFrame) -> bytes:
     """Write with CIC-style headers: leading spaces and Title Case."""
     renamed = {c: " " + c.replace("_", " ").title() if c != "label" else " Label" for c in frame.columns}
     return frame.rename(columns=renamed).to_csv(index=False).encode()
+
+
+def telemetry_csv(days: float = 3, interval_seconds: int = 300, seed: int = 11, peak: float = 0.85,
+                  capacity_bps: float = None, with_utilization: bool = True, gap: tuple = None) -> bytes:
+    """Daily-cycle utilization with noise, ISO-8601 UTC timestamps. Test data only."""
+    rng = np.random.default_rng(seed)
+    n = int(days * 86400 / interval_seconds)
+    times = pd.date_range("2026-10-01T00:00:00Z", periods=n, freq=f"{interval_seconds}s")
+    hours = times.hour + times.minute / 60
+    utilization = np.clip(0.15 + (peak - 0.15) * (0.5 + 0.5 * np.sin((hours - 8) / 24 * 2 * np.pi))
+                          + rng.normal(0, 0.02, n), 0, 1)
+    cap = capacity_bps or 100e6
+    throughput = utilization * cap
+    frame = pd.DataFrame({
+        "timestamp": times.strftime("%Y-%m-%dT%H:%M:%SZ"), "interface_name": "eth0",
+        "incoming_bytes_per_second": throughput * 0.7 / 8, "outgoing_bytes_per_second": throughput * 0.3 / 8,
+        "latency_ms": 10 + 20 * utilization + rng.normal(0, 1, n),
+    })
+    if with_utilization:
+        frame["utilization_ratio"] = utilization.round(4)
+    if capacity_bps:
+        frame["configured_capacity_bps"] = capacity_bps
+    if gap:
+        frame = frame.drop(frame.index[gap[0]:gap[1]])
+    return frame.to_csv(index=False).encode()
