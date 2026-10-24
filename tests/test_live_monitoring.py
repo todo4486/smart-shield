@@ -243,3 +243,16 @@ def test_spawned_worker_does_not_rerun_the_parent_main_script(tmp_path, monkeypa
     assert process.exitcode == 0 and ran.exists()
     assert not marker.exists(), "the spawned worker re-ran the parent's main script"
     assert sys.modules["__main__"] is fake_main  # restored
+
+
+def test_macos_capture_needs_read_and_write_access(monkeypatch):
+    """Scapy opens /dev/bpf* with O_RDWR: read-only access (e.g. chmod o+r) must not count as capture support."""
+    import os
+
+    def access(path, mode):
+        return not (mode & os.W_OK)  # readable but not writable
+
+    monkeypatch.setattr(live.os, "access", access)
+    capability = live.capture_capability(system="Darwin")
+    assert not capability.packets and capability.counters
+    assert any("reading and writing" in r for r in capability.reasons)

@@ -78,10 +78,12 @@ def capture_capability(system: Optional[str] = None) -> Capability:
         reasons.append("Scapy is not installed, so packet capture is unavailable.")
     system = system or platform.system()
     if packets and system == "Darwin":
-        if not os.access("/dev/bpf0", os.R_OK):
+        # Scapy opens /dev/bpf* with O_RDWR, so read access alone is not enough.
+        if not os.access("/dev/bpf0", os.R_OK | os.W_OK):
             packets = False
-            reasons.append("macOS only lets root read packet-capture devices (/dev/bpf*). Run the app with sudo in "
-                           "an authorised lab, or install Wireshark's ChmodBPF helper to grant access.")
+            reasons.append("macOS only lets root open packet-capture devices (/dev/bpf*) for reading and writing, "
+                           "which Scapy needs. Install Wireshark (its ChmodBPF helper grants access to the "
+                           "access_bpf group), then log out and back in; or run the app with sudo in an authorised lab.")
     elif packets and system == "Linux":
         if os.geteuid() != 0 and not _linux_has_cap_net_raw():
             packets = False
