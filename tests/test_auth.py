@@ -32,7 +32,7 @@ def test_registration_normalizes_email_and_is_audited():
 
 
 def test_duplicate_email_rejected_case_insensitively(admin_user):
-    with pytest.raises(auth_service.RegistrationError, match="already exists"):
+    with pytest.raises(auth_service.RegistrationError, match="could not create an account"):
         auth_service.register("Copy", "ADA@example.com", STRONG_PASSWORD)
     assert len(audit_rows("auth.register", "failure")) == 1
 

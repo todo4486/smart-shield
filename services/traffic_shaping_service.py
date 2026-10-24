@@ -98,12 +98,16 @@ def _rate(value: float) -> str:
 
 def build_apply_commands(interface: str, total_bps: int, classes: Sequence[dict]) -> List[List[str]]:
     """HTB tree: 1: root -> 1:1 (total) -> 1:1N per class (rate = allocation, ceil = maximum), plus a
-    small default class for unmatched traffic. DSCP filters classify packets when a class has one."""
+    small default class for unmatched traffic. DSCP filters classify packets when a class has one.
+
+    The existing root qdisc is deleted first: `tc qdisc replace` keeps the old child classes and
+    filters, so a policy with fewer classes (or a rollback) would leave stale limits behind."""
     tc = get_settings().tc_binary
     interface = _check_interface(interface)
     commands = [
-        [tc, "qdisc", "replace", "dev", interface, "root", "handle", "1:", "htb", "default", str(DEFAULT_CLASS_MINOR)],
-        [tc, "class", "replace", "dev", interface, "parent", "1:", "classid", "1:1", "htb",
+        [tc, "qdisc", "del", "dev", interface, "root"],
+        [tc, "qdisc", "add", "dev", interface, "root", "handle", "1:", "htb", "default", str(DEFAULT_CLASS_MINOR)],
+        [tc, "class", "add", "dev", interface, "parent", "1:", "classid", "1:1", "htb",
          "rate", _rate(total_bps), "ceil", _rate(total_bps)],
     ]
     reserved = 0
@@ -113,17 +117,17 @@ def build_apply_commands(interface: str, total_bps: int, classes: Sequence[dict]
         rate = max(int(c["allocated_bps"]), MIN_RATE_BPS)
         ceil = max(int(min(c["maximum_bps"], total_bps)), rate)
         reserved += rate
-        commands.append([tc, "class", "replace", "dev", interface, "parent", "1:1", "classid", f"1:{index}", "htb",
+        commands.append([tc, "class", "add", "dev", interface, "parent", "1:1", "classid", f"1:{index}", "htb",
                          "rate", _rate(rate), "ceil", _rate(ceil)])
         dscp = c.get("dscp")
         if dscp is not None:
             if not 0 <= int(dscp) <= 63:
                 raise ShapingError("DSCP must be between 0 and 63.")
-            commands.append([tc, "filter", "replace", "dev", interface, "parent", "1:", "protocol", "ip",
+            commands.append([tc, "filter", "add", "dev", interface, "parent", "1:", "protocol", "ip",
                              "prio", str(index), "u32", "match", "ip", "dsfield", hex(int(dscp) << 2), "0xfc",
                              "flowid", f"1:{index}"])
     default_rate = max(MIN_RATE_BPS, total_bps - reserved) if total_bps - reserved > MIN_RATE_BPS else MIN_RATE_BPS
-    commands.append([tc, "class", "replace", "dev", interface, "parent", "1:1", "classid", f"1:{DEFAULT_CLASS_MINOR}",
+    commands.append([tc, "class", "add", "dev", interface, "parent", "1:1", "classid", f"1:{DEFAULT_CLASS_MINOR}",
                      "htb", "rate", _rate(default_rate), "ceil", _rate(total_bps)])
     return commands
 
@@ -140,7 +144,8 @@ def _run(commands: List[List[str]], tolerate_missing: bool = False) -> List[dict
         log.append(entry)
         if result.returncode != 0:
             missing = "No such file" in entry["stderr"] or "Cannot delete qdisc with handle of zero" in entry["stderr"]
-            if not (tolerate_missing and missing):
+            # Deleting a root qdisc that is not there is fine: there was simply nothing to remove.
+            if not ((tolerate_missing or argv[2] == "del") and missing):
                 raise ShapingError(f"`{' '.join(argv[1:4])}` failed: {entry['stderr'] or result.returncode}")
     return log
 

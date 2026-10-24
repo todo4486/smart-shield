@@ -61,3 +61,7 @@ def list_users(conn: sqlite3.Connection) -> List[sqlite3.Row]:
         "SELECT id, name, email, role, is_active, created_at, last_login_at "
         "FROM users ORDER BY created_at, id"
     ).fetchall()
+
+
+def bump_session_epoch(conn: sqlite3.Connection, user_id: int) -> None:
+    conn.execute("UPDATE users SET session_epoch = session_epoch + 1 WHERE id = ?", (user_id,))

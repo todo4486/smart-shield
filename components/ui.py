@@ -2,6 +2,7 @@
 html.escape() before being placed in markdown HTML."""
 from __future__ import annotations
 
+import math
 from html import escape
 from typing import Iterable, Optional, Sequence, Tuple
 
@@ -92,8 +93,18 @@ def section_label(text: str) -> None:
 
 # ------------------------------------------------------------- formatting
 
-def format_bytes_rate(value: Optional[float]) -> Optional[str]:
+def _missing(value) -> bool:
+    """None, NaN (pandas missing values) and infinities are all "no measurement"."""
     if value is None:
+        return True
+    try:
+        return not math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return True
+
+
+def format_bytes_rate(value: Optional[float]) -> Optional[str]:
+    if _missing(value):
         return None
     units = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"]
     size = float(value)
@@ -105,7 +116,7 @@ def format_bytes_rate(value: Optional[float]) -> Optional[str]:
 
 
 def format_bits_rate(value: Optional[float]) -> Optional[str]:
-    if value is None:
+    if _missing(value):
         return None
     units = ["bit/s", "kbit/s", "Mbit/s", "Gbit/s", "Tbit/s"]
     size = float(value)
@@ -117,7 +128,7 @@ def format_bits_rate(value: Optional[float]) -> Optional[str]:
 
 
 def format_ratio(value: Optional[float]) -> Optional[str]:
-    return None if value is None else f"{value * 100:.1f}%"
+    return None if _missing(value) else f"{float(value) * 100:.1f}%"
 
 
 def format_timestamp(value: Optional[str]) -> str:

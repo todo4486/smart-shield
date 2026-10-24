@@ -42,7 +42,8 @@ def session_telemetry(principal: Principal, session_id: int, interface: Optional
         if monitoring_repository.get(conn, session_id) is None:
             raise SessionNotFound(f"Monitoring session {session_id} does not exist.")
         interfaces = telemetry_repository.interfaces_for_session(conn, session_id)
-        rows = telemetry_repository.metrics_for_session(conn, session_id, interface or None)
+        # None = all interfaces; "" = rows without an interface name (never "all", which would mix links).
+        rows = telemetry_repository.metrics_for_session(conn, session_id, interface)
     frame = pd.DataFrame([dict(r) for r in rows])
     if frame.empty:
         return SessionTelemetry(session_id, interfaces, frame, {}, {}, {})
@@ -63,6 +64,24 @@ def session_telemetry(principal: Principal, session_id: int, interface: Optional
                 "p95": float(series.quantile(0.95)), "max": float(series.max()), "count": int(series.size),
             }
     return SessionTelemetry(session_id, interfaces, frame, coverage, provenance, stats)
+
+
+def session_interfaces(principal: Principal, session_id: int) -> List[str]:
+    """Interface names in a session ("" stands for rows recorded without one)."""
+    require_permission(principal, Permission.VIEW_DASHBOARD, action="telemetry.view")
+    with database_service.session() as conn:
+        return telemetry_repository.interfaces_for_session(conn, session_id)
+
+
+def recent_metrics(principal: Principal, session_id: int, limit: int = 200) -> pd.DataFrame:
+    """The newest `limit` measurements of a session, oldest first (cheap enough to poll)."""
+    require_permission(principal, Permission.VIEW_DASHBOARD, action="telemetry.view")
+    with database_service.session() as conn:
+        rows = telemetry_repository.recent_metrics(conn, session_id, limit)
+    frame = pd.DataFrame([dict(r) for r in reversed(rows)])
+    if not frame.empty:
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, format="ISO8601")
+    return frame
 
 
 def downsample(frame: pd.DataFrame, columns: List[str], max_points: int = MAX_CHART_POINTS):

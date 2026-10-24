@@ -4,7 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from components import charts
-from components.ui import format_bits_rate, format_bytes_rate, format_timestamp, kpi_tile, section_label
+from components.ui import format_bits_rate, format_bytes_rate, format_ratio, format_timestamp, kpi_tile, section_label
 from services import interface_counters, live_monitor_service, settings_service, telemetry_view_service
 from services.authorization import Permission, PermissionDenied, Principal
 from services.live_monitor_service import MODES, MonitorError
@@ -55,17 +55,19 @@ def render(principal: Principal) -> None:
             st.warning(f"{status.dropped_messages:,} worker messages were dropped because the app fell behind "
                        "(bounded queue). Increase the sampling interval if this keeps happening.")
         if status.session_id and status.samples:
-            telemetry = telemetry_view_service.session_telemetry(principal, status.session_id)
-            recent = telemetry.metrics.tail(200)
+            # Only the newest rows: this fragment reruns every 3 s, so never load the whole capture.
+            recent = telemetry_view_service.recent_metrics(principal, status.session_id, limit=200)
             if not recent.empty:
                 latest = recent.iloc[-1]
-                st.caption(f"Latest measured: in {format_bytes_rate(latest['incoming_bytes_per_second'])} · out "
-                           f"{format_bytes_rate(latest['outgoing_bytes_per_second'])} · throughput "
-                           f"{format_bits_rate(latest['throughput_bps'])} (derived) · utilization "
-                           + ("unavailable (no configured capacity)" if latest["utilization_ratio"] != latest["utilization_ratio"]
-                              or latest["utilization_ratio"] is None else f"{latest['utilization_ratio']:.1%} (derived)")
-                           + " · latency " + ("unavailable (no target configured)" if latest["latency_ms"] != latest["latency_ms"]
-                                              or latest["latency_ms"] is None else f"{latest['latency_ms']:.1f} ms"))
+                na = "unavailable"
+                utilization = format_ratio(latest["utilization_ratio"])
+                latency = latest["latency_ms"]
+                st.caption(f"Latest measured: in {format_bytes_rate(latest['incoming_bytes_per_second']) or na} · out "
+                           f"{format_bytes_rate(latest['outgoing_bytes_per_second']) or na} · throughput "
+                           f"{format_bits_rate(latest['throughput_bps']) or na} (derived) · utilization "
+                           + (f"{utilization} (derived)" if utilization else "unavailable (no configured capacity)")
+                           + " · latency " + ("unavailable (no target configured)" if latency is None or latency != latency
+                                              else f"{latency:.1f} ms"))
                 charts.time_series(recent, [("incoming_bytes_per_second", "Incoming"),
                                             ("outgoing_bytes_per_second", "Outgoing")],
                                    title=f"Live traffic on {status.interface}", y_title="Bytes per second", height=280)

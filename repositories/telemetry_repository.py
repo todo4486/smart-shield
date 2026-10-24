@@ -25,11 +25,21 @@ def metrics_for_session(conn: sqlite3.Connection, session_id: int, interface_nam
                         limit: int = 500_000) -> List[sqlite3.Row]:
     sql = "SELECT * FROM network_metrics WHERE session_id = ?"
     params: list = [session_id]
-    if interface_name is not None:
+    # None = every interface; "" = rows recorded without an interface name; anything else = that interface.
+    if interface_name == "":
+        sql += " AND (interface_name IS NULL OR interface_name = '')"
+    elif interface_name is not None:
         sql += " AND interface_name = ?"
         params.append(interface_name)
     params.append(limit)
     return conn.execute(sql + " ORDER BY timestamp, id LIMIT ?", params).fetchall()
+
+
+def recent_metrics(conn: sqlite3.Connection, session_id: int, limit: int) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM network_metrics WHERE session_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
+        (session_id, limit),
+    ).fetchall()
 
 
 def interfaces_for_session(conn: sqlite3.Connection, session_id: int) -> List[str]:

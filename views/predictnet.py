@@ -48,10 +48,10 @@ c1, c2 = st.columns(2)
 session_id = c1.selectbox("Telemetry session", list(by_id),
                           index=list(by_id).index(default_session) if default_session in by_id else 0,
                           format_func=lambda i: f"#{i} · {by_id[i].configuration.get('filename', '')}")
-telemetry = telemetry_view_service.session_telemetry(principal, session_id)
-interfaces = telemetry.interfaces or [""]
+interfaces = telemetry_view_service.session_interfaces(principal, session_id) or [""]
 interface = c2.selectbox("Interface", interfaces, format_func=lambda i: i or "(unnamed)")
-frame = telemetry.metrics if not interface else telemetry.metrics[telemetry.metrics["interface_name"] == interface]
+# "" selects rows without an interface name; it never means "all interfaces".
+frame = telemetry_view_service.session_telemetry(principal, session_id, interface).metrics
 latest = frame.iloc[-1]
 
 # ------------------------------------------------------------------ current
@@ -96,7 +96,7 @@ with forecast_tab:
         if st.button("Generate forecast from the latest data", type="primary", icon=":material/insights:"):
             try:
                 with st.spinner("Forecasting…"):
-                    run = congestion_prediction_service.generate_forecast(principal, session_id, interface or None)
+                    run = congestion_prediction_service.generate_forecast(principal, session_id, interface)
             except (PredictionError, PermissionDenied) as exc:
                 st.error(str(exc))
             else:
@@ -148,7 +148,7 @@ with forecast_tab:
 with backtest_tab:
     horizon = st.radio("Horizon", horizons, horizontal=True, format_func=lambda h: f"{h // 60} min")
     try:
-        bt = congestion_prediction_service.backtest(principal, model, session_id, interface or None, horizon)
+        bt = congestion_prediction_service.backtest(principal, model, session_id, interface, horizon)
     except (PredictionError, model_registry_service.ModelRegistryError) as exc:
         st.error(str(exc))
         bt = pd.DataFrame()

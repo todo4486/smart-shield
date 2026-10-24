@@ -239,7 +239,7 @@ CREATE TABLE users (
     created_at      TEXT    NOT NULL,
     updated_at      TEXT    NOT NULL,
     last_login_at   TEXT
-);
+, session_epoch INTEGER NOT NULL DEFAULT 0 CHECK (session_epoch >= 0));
 
 CREATE INDEX idx_alert_events_alert_time ON alert_events (alert_id, created_at);
 

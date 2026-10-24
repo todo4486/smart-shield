@@ -181,7 +181,7 @@ def generate_forecast(principal: Principal, session_id: int, interface_name: Opt
     created: List[int] = []
     suppressed = 0
     source_name = str(frame["source_name"].iloc[-1]) if "source_name" in frame.columns else "unknown"
-    iface = interface_name or "(all)"
+    iface = "(all interfaces)" if interface_name is None else (interface_name or "(unnamed interface)")
     with database_service.session(write=True) as conn:
         for horizon_seconds, spec in sorted(bundle["horizons"].items()):
             predicted = float(clip_predictions(spec["model"].predict(latest), target)[0])
@@ -194,7 +194,12 @@ def generate_forecast(principal: Principal, session_id: int, interface_name: Opt
                 predicted_util = predicted / capacity if capacity else None
                 q90_util = q90 / capacity if capacity else 0.0
                 if predicted_util is not None and predicted_util > 1:
-                    predicted_util = 1.0
+                    # More throughput than the configured capacity means the capacity is wrong; never invent 100%.
+                    predicted_util = None
+                    message = ("Predicted throughput is above the configured capacity; check the capacity value. "
+                               "Predicted utilization is treated as unavailable.")
+                    if message not in warnings:
+                        warnings.append(message)
             risk = assess_risk(current_util, predicted_util, q90_util, growth, settings,
                                packet_loss=loss, latency_ratio=latency_ratio)
             target_time = base_time + timedelta(seconds=int(horizon_seconds))
@@ -226,10 +231,13 @@ def generate_forecast(principal: Principal, session_id: int, interface_name: Opt
                                               -f.horizon_seconds))
         candidates = []
         if worst.risk.level in ("high", "critical"):
+            outlook = (f"Utilization is forecast to reach {worst.predicted_utilization:.0%} within "
+                       f"{worst.horizon_seconds // 60} min on {iface} ({worst.risk.level} risk)."
+                       if worst.predicted_utilization is not None else
+                       f"Current utilization on {iface} is {worst.risk.level} risk "
+                       f"({current_util:.0%}); the forecast itself is unavailable.")
             candidates.append(("congestion", "critical" if worst.risk.level == "critical" else "high",
-                               "Predicted congestion",
-                               f"Utilization is forecast to reach {worst.predicted_utilization:.0%} within "
-                               f"{worst.horizon_seconds // 60} min on {iface} ({worst.risk.level} risk).",
+                               "Predicted congestion", outlook,
                                "Review the bandwidth recommendation, look for large scheduled transfers, and consider "
                                "prioritising latency-sensitive traffic."))
         if (growth is not None and current_util is not None and growth >= settings.rapid_rise_per_hour

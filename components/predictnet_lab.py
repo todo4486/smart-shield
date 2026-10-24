@@ -63,16 +63,17 @@ def render(principal: Principal) -> None:
             session_id = st.selectbox("Telemetry session", list(by_id),
                                       format_func=lambda i: f"#{i} · {by_id[i].configuration.get('filename', '')} "
                                                             f"({by_id[i].metric_count:,} measurements)")
-            telemetry = telemetry_view_service.session_telemetry(principal, session_id)
-            interfaces = telemetry.interfaces or [""]
+            interfaces = telemetry_view_service.session_interfaces(principal, session_id) or [""]
             c1, c2, c3 = st.columns(3)
             interface = c1.selectbox("Interface", interfaces, format_func=lambda i: i or "(unnamed)")
+            # "" selects rows without an interface name; it never means "all interfaces".
+            telemetry = telemetry_view_service.session_telemetry(principal, session_id, interface)
             available = [t for t in TARGETS if telemetry.coverage.get(t, 0) > 0]
             if not available:
                 st.warning("This session has neither utilization nor throughput values to forecast.")
                 return
             target = c2.selectbox("Forecast target", available, format_func=lambda t: TARGETS[t])
-            frame = telemetry.metrics if not interface else telemetry.metrics[telemetry.metrics["interface_name"] == interface]
+            frame = telemetry.metrics
             detected = summarize(frame, target, 300).median_interval_seconds or 300
             interval = int(c3.number_input("Sampling interval (s)", 10, 86_400, int(round(detected)), step=10,
                                            help=f"Detected median spacing: {detected:,.0f} s. Horizons must be multiples."))
@@ -106,7 +107,7 @@ def render(principal: Principal) -> None:
                 bar = st.progress(0.0, text="Starting")
                 try:
                     report = congestion_training_service.train_forecaster(
-                        principal, ForecastTrainingOptions(session_id=session_id, interface_name=interface or None,
+                        principal, ForecastTrainingOptions(session_id=session_id, interface_name=interface,
                                                            target=target, interval_seconds=interval,
                                                            horizons_minutes=tuple(horizons), activate=activate),
                         progress=lambda message, fraction: bar.progress(fraction, text=message),

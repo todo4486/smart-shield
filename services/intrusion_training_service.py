@@ -172,12 +172,21 @@ def _split(frame: pd.DataFrame, strategy: str, dayfirst: bool) -> tuple:
             raise TrainingError("A time-based split needs parseable timestamps on at least 99% of rows.")
     if strategy == "time":
         raise TrainingError("A time-based split needs a Timestamp column in every selected dataset.")
+    # Each of train / validation / test needs a few benign and attack rows; check before sklearn raises.
+    smallest = int(frame["_y"].value_counts().min())
+    if smallest < 3 * MIN_ROWS_PER_SPLIT_CLASS:
+        kind = "attack" if frame["_y"].value_counts().idxmin() == 1 else "benign"
+        raise TrainingError(f"Only {smallest} {kind} row(s) are available; at least {3 * MIN_ROWS_PER_SPLIT_CLASS} "
+                            "are needed so training, validation and test each get some. Add more data.")
     stratify = frame["_type"]
     if stratify.value_counts().min() < 3:
         stratify = frame["_y"]
-    train, rest = train_test_split(frame, test_size=0.30, random_state=RANDOM_STATE, stratify=stratify)
-    rest_stratify = rest["_type"] if rest["_type"].value_counts().min() >= 2 else rest["_y"]
-    validation, test = train_test_split(rest, test_size=0.50, random_state=RANDOM_STATE, stratify=rest_stratify)
+    try:
+        train, rest = train_test_split(frame, test_size=0.30, random_state=RANDOM_STATE, stratify=stratify)
+        rest_stratify = rest["_type"] if rest["_type"].value_counts().min() >= 2 else rest["_y"]
+        validation, test = train_test_split(rest, test_size=0.50, random_state=RANDOM_STATE, stratify=rest_stratify)
+    except ValueError as exc:  # sklearn: a class is too small to stratify
+        raise TrainingError(f"The data could not be split into training, validation and test sets: {exc}") from exc
     return (train, validation, test), "stratified_random", None
 
 

@@ -169,7 +169,8 @@ def test_shaping_requires_linux(admin, monkeypatch):
 def test_apply_builds_fixed_argv_and_records_action(admin, policy, shaping):
     rec = accepted_recommendation(admin)
     commands = traffic_shaping_service.preview_apply(admin, rec.id, "eth0")
-    assert commands[0][1:] == ["qdisc", "replace", "dev", "eth0", "root", "handle", "1:", "htb", "default", "99"]
+    assert commands[0][1:] == ["qdisc", "del", "dev", "eth0", "root"]  # start from a clean root
+    assert commands[1][1:] == ["qdisc", "add", "dev", "eth0", "root", "handle", "1:", "htb", "default", "99"]
     assert any("dsfield" in c for c in commands)  # DSCP filters for classes that have one
     traffic_shaping_service.apply_recommendation(admin, rec.id, "eth0", confirm_interface="eth0")
     assert shaping.calls == commands
@@ -214,7 +215,7 @@ def test_rollback_restores_previous_state(admin, policy, shaping):
     shaping.calls.clear()
     traffic_shaping_service.rollback(admin, "eth0", confirm_interface="eth0")
     # Rolling back the second apply re-applies the first one's classes.
-    assert shaping.calls[0][1:4] == ["qdisc", "replace", "dev"]
+    assert shaping.calls[0][1:4] == ["qdisc", "del", "dev"] and shaping.calls[1][1:4] == ["qdisc", "add", "dev"]
     shaping.calls.clear()
     traffic_shaping_service.rollback(admin, "eth0", confirm_interface="eth0")
     # Rolling back the first apply removes shaping entirely.

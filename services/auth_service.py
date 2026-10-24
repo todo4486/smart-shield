@@ -32,6 +32,8 @@ EMAIL_MAX_LENGTH = 254
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 GENERIC_LOGIN_ERROR = "Invalid email or password."
+DUPLICATE_SIGNUP_ERROR = ("We could not create an account with these details. If you already have an account, "
+                          "sign in instead, or ask an administrator to reset your password.")
 LOCKED_LOGIN_ERROR = "Too many failed sign-in attempts. Please wait and try again later."
 
 _hasher = PasswordHasher()
@@ -63,6 +65,7 @@ class User:
     is_active: bool
     created_at: str
     last_login_at: Optional[str]
+    session_epoch: int = 0  # bumped on password change/reset; ends older sessions
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "User":
@@ -74,6 +77,7 @@ class User:
             is_active=bool(row["is_active"]),
             created_at=row["created_at"],
             last_login_at=row["last_login_at"],
+            session_epoch=row["session_epoch"] if "session_epoch" in row.keys() else 0,
         )
 
     def to_principal(self) -> Principal:
@@ -189,7 +193,8 @@ def register(
             audit_service.record_standalone(
                 user_id=None, action="auth.register", outcome="failure", details={"reason": "duplicate_email"}
             )
-            raise RegistrationError("An account with this email already exists.") from exc
+            # Deliberately vague so the form cannot be used to discover which emails have accounts.
+            raise RegistrationError(DUPLICATE_SIGNUP_ERROR) from exc
         raise
     return User.from_row(row)
 
@@ -289,6 +294,7 @@ def change_password(principal: Principal, current_password: str, new_password: s
     new_hash = hash_password(new_password)
     with database_service.session(write=True) as conn:
         user_repository.update_password_hash(conn, row["id"], new_hash, to_iso(now))
+        user_repository.bump_session_epoch(conn, row["id"])  # sign out every other session
         audit_service.record(conn, user_id=row["id"], action="auth.change_password")
 
 
@@ -305,6 +311,7 @@ def reset_password_cli(email: str, new_password: str) -> User:
         if row is None:
             raise AuthError("No account has that email.")
         user_repository.update_password_hash(conn, row["id"], new_hash, now)
+        user_repository.bump_session_epoch(conn, row["id"])
         login_attempt_repository.record_attempt(conn, email, True, now)  # a success resets the failure count
         audit_service.record(conn, user_id=row["id"], action="cli.reset_password")
         fresh = user_repository.get_by_id(conn, row["id"])

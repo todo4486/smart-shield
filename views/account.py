@@ -5,7 +5,7 @@ import streamlit as st
 
 from components.guard import require_principal
 from components.ui import format_timestamp, page_header
-from services import auth_service
+from services import auth_service, session_service
 
 principal = require_principal()
 page_header("My account", "Your profile and password. Changes are recorded in the audit log.", eyebrow="Workspace")
@@ -32,6 +32,7 @@ if submitted:
         except auth_service.AuthError as exc:
             st.error(str(exc))
         else:
-            st.success("Password changed.")
+            session_service.refresh_epoch(st.session_state)  # this tab stays signed in; all others are signed out
+            st.success("Password changed. Any other signed-in tabs or devices have been signed out.")
 st.caption("Forgot your password? An operator can reset it on the server with "
            "`python -m scripts.manage reset-password --email you@example.com`.")
