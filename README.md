@@ -43,7 +43,7 @@ Principles that apply everywhere:
 
 ## Quick start
 
-Python 3.9+ works. **Python 3.11 or newer is strongly recommended:** several dependency security fixes need ≥ 3.10.
+**Python 3.11 or newer is recommended** (verified on 3.11.17 with a clean `pip-audit`). Python 3.9 still runs the app, but its dependency releases carry known security advisories.
 See [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md).
 
 macOS / Linux:

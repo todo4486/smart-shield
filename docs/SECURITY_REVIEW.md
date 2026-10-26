@@ -29,19 +29,17 @@ testing showed a full traceback with server file paths to the user.
 - **Also:** `enableXsrfProtection = true` and `enableCORS = true` are now explicit.
 - **Test:** `test_streamlit_config_hides_error_details_and_keeps_xsrf`.
 
-### 2. Known vulnerabilities in dependencies (open: needs Python ≥ 3.10)
+### 2. Known vulnerabilities in dependencies (fixed on 2026-10-26)
 
-`pip-audit` reports **60 advisories**: pillow (41), urllib3 (5), pip (4), streamlit (2), filelock (2), and one each in
-requests, python-dotenv, pyarrow, pytest, msgpack and setuptools. Almost all are transitive.
+On Python 3.9.6, `pip-audit` reported **60 advisories** (pillow, urllib3, pip, streamlit, filelock and others, almost
+all transitive), and every fixed release needed Python 3.10 or newer.
 
-- **Why they can't be fixed now:** every fixed release requires **Python 3.10 or newer**. This machine runs Python
-  3.9.6, which reached end of life in October 2025. For example, `pip index versions urllib3` shows 2.6.3 as the newest
-  release available for 3.9.
-- **Done on 3.9:** pip and setuptools were upgraded as far as 3.9 allows.
-- **Recommendation:** install Python 3.11 or 3.12, recreate `.venv`, run `pip install -r requirements.txt`, and re-run
-  `pip-audit` and `pytest -q`. The code uses nothing specific to 3.9.
-- **Interim risk:** moderate. The app is meant for a local lab, most advisories concern image or HTTP-client
-  parsing of untrusted input the app does not process, and Streamlit's advisories should be checked once upgraded.
+- **Fix:** `.venv` was rebuilt on Python 3.11.17 with `pip install -r requirements.txt` (streamlit 1.66.1, pillow 13.0.0,
+  urllib3 2.8.0), and setuptools was upgraded.
+- **Evidence:** `pip-audit` reports **no known vulnerabilities**, and all 277 tests pass on 3.11.
+- **Side effect:** newer Streamlit does not register the Administration page for analysts at all, so the guard test
+  accepts either "page not registered" or "page registered but guarded".
+- **Still true:** Python 3.9 can still run the app, but it only gets releases with known advisories.
 
 ### 3. No way to change a password (fixed)
 

@@ -1,5 +1,5 @@
 # Smart Shield + PredictNet — runtime and test dependencies.
-# Supports Python 3.9+ (3.11+ recommended).
+# Python 3.11+ recommended (3.9 only gets releases with known security advisories).
 streamlit>=1.48,<2
 plotly>=5.20,<8
 pandas>=2.0,<3
