@@ -26,6 +26,7 @@ from services.intrusion_features import LIVE_FLOW_FEATURES
 
 IDLE_TIMEOUT_S = 15.0
 ACTIVE_TIMEOUT_S = 120.0
+EXPIRY_SWEEP_S = 1.0  # idle flows are swept at most once per second of packet time, not on every packet
 MAX_ACTIVE_FLOWS = 50_000  # bounded memory: the oldest flows are flushed early beyond this
 TCP_FIN = 0x01
 TCP_RST = 0x04
@@ -134,6 +135,7 @@ class FlowTable:
         self.max_active = max_active
         self.active: Dict[tuple, Flow] = {}
         self.evicted_for_memory = 0
+        self._next_sweep = float("-inf")
 
     @staticmethod
     def _key(src: str, dst: str, sport, dport, proto: int) -> tuple:
@@ -142,9 +144,14 @@ class FlowTable:
 
     def add(self, packet: Packet) -> List[Dict[str, object]]:
         ts, src, dst, sport, dport, proto, length, flags = packet
-        finished = self.expire(ts)
+        # A full sweep is O(active flows), so it runs at most once per EXPIRY_SWEEP_S of packet time.
+        finished = self.expire(ts) if ts >= self._next_sweep else []
         key = self._key(src, dst, sport, dport, proto)
         flow = self.active.get(key)
+        if flow is not None and ts - flow.last > self.idle_timeout:  # exact idle rule for this flow between sweeps
+            flow.end_reason = "idle timeout"
+            finished.append(self.active.pop(key).record())
+            flow = None
         if flow is not None and ts - flow.start > self.active_timeout:
             flow.end_reason = "active timeout"
             finished.append(self.active.pop(key).record())
@@ -166,6 +173,7 @@ class FlowTable:
         return finished
 
     def expire(self, now: float) -> List[Dict[str, object]]:
+        self._next_sweep = now + EXPIRY_SWEEP_S
         done = [k for k, f in self.active.items() if now - f.last > self.idle_timeout]
         out = []
         for key in done:

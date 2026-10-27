@@ -11,8 +11,8 @@ from components import charts
 from components.guard import require_principal
 from components.theme import COLORS, apply_chart_theme
 from components.ui import (
-    empty_state, format_bits_rate, format_bytes_rate, format_ratio, format_timestamp, kpi_tile, page_header,
-    section_label,
+    empty_state, format_bits_rate, format_bytes_rate, format_ratio, format_timestamp, kpi_tile, page_header, recall,
+    remember, section_label,
 )
 from services import (
     congestion_prediction_service, model_registry_service, monitoring_service, settings_service, telemetry_view_service,
@@ -100,8 +100,9 @@ with forecast_tab:
             except (PredictionError, PermissionDenied) as exc:
                 st.error(str(exc))
             else:
-                st.session_state["last_forecast_run"] = run
-    run = st.session_state.get("last_forecast_run")
+                remember(st.session_state, "last_forecast_run", (session_id, interface), run)
+    # Only show a run for the session and interface it was generated for.
+    run = recall(st.session_state, "last_forecast_run", (session_id, interface))
     if run is None:
         st.caption("Forecasts are generated on request and stored with the model version. "
                    "The most recent stored forecasts appear under Congestion history.")

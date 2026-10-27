@@ -51,6 +51,10 @@ def render(principal: Principal) -> None:
             st.error(status.last_error)
         if status.detection.get("reason") and status.mode == "packets":
             (st.success if status.detection.get("enabled") else st.warning)(status.detection["reason"])
+        if status.dropped_packets:
+            st.warning(f"{status.dropped_packets:,} captured packets were discarded because flow processing fell "
+                       "behind, so some stored flows are incomplete. Capture on a quieter interface or use "
+                       "interface-counter mode.")
         if status.dropped_messages:
             st.warning(f"{status.dropped_messages:,} worker messages were dropped because the app fell behind "
                        "(bounded queue). Increase the sampling interval if this keeps happening.")

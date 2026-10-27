@@ -171,3 +171,121 @@ def test_duplicate_signup_message_does_not_confirm_the_account(admin_user):
         auth_service.register("Copy", admin_user.email, STRONG_PASSWORD)
     assert "already exists" not in str(err.value) and str(err.value) == auth_service.DUPLICATE_SIGNUP_ERROR
     assert "duplicate_email" in audit_rows("auth.register", "failure")[0]["details_json"]  # admins still see why
+
+
+# ---------------------------------------------------------------- second review (live capture and PredictNet)
+
+from components.ui import recall, remember  # noqa: E402
+from services import capture_worker, flow_extractor, live_monitor_service as live, settings_service  # noqa: E402
+from services.interface_counters import Snapshot, rates, validate_latency_target  # noqa: E402
+from tests.test_live_monitoring import SAMPLE, fake_worker, wait_for  # noqa: E402
+
+
+# 10. A failed write in the consumer ends the capture in ERROR instead of leaving it RUNNING.
+def test_consumer_failure_sets_error_and_stops_worker(admin, monkeypatch):
+    settings_service.update_monitoring_settings(admin, settings_service.MonitoringSettings(("eth0",)))
+    monkeypatch.setattr(live, "capture_capability", lambda system=None: live.Capability(True, True, []))
+
+    def script(config):
+        yield {"type": "started", "pid": 1, "mode": config["mode"]}
+        yield {"type": "metrics", "at": "2026-10-22T10:00:00.000000+00:00", "sample": dict(SAMPLE),
+               "dropped_messages": 0, "active_flows": None}
+
+    monitor = live.LiveMonitor(worker_target=fake_worker(script), use_threads=True)
+
+    def broken_flush(metrics, flows):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(monitor, "_flush", broken_flush)
+    session_id = monitor.start(admin, "eth0", mode="counters")
+    assert wait_for(lambda: monitor.status.state == "ERROR")
+    assert not monitor.status.running and "database is locked" in monitor.status.last_error
+    assert monitor._stop_event.is_set()  # the worker is told to stop
+    with database_service.session() as conn:
+        row = conn.execute("SELECT status, status_message FROM monitoring_sessions WHERE id = ?", (session_id,)).fetchone()
+    assert row["status"] == "ERROR" and "could not be saved" in row["status_message"]
+    monitor._worker.join(timeout=5)
+
+
+# 11. Idle flows are swept at most once per second of packet time, and the idle rule stays exact.
+def test_flow_expiry_is_not_a_full_scan_per_packet(monkeypatch):
+    table = flow_extractor.FlowTable()
+    sweeps = []
+    original = table.expire
+    monkeypatch.setattr(table, "expire", lambda now: sweeps.append(now) or original(now))
+    for i in range(1000):  # 1000 packets over 0.1 s of packet time
+        table.add((1000.0 + i * 0.0001, f"10.0.0.{i % 200}", "10.0.1.1", 40000 + i, 443, 6, 100, 0))
+    assert len(sweeps) == 1
+
+
+def test_idle_flow_still_ends_between_sweeps():
+    table = flow_extractor.FlowTable(idle_timeout=15)
+    pkt = lambda ts, sport=5000: (ts, "10.0.0.1", "10.0.0.2", sport, 80, 17, 10, 0)  # noqa: E731
+    table.add(pkt(0.0))
+    for k in range(1, 16):  # other traffic keeps sweeps happening; the last sweep is just before 15.5 s
+        table.add(pkt(float(k) - 0.6, sport=6000 + k))
+    finished = table.add(pkt(15.5))  # 15.5 s idle, but the latest sweep (14.4 s) did not see it as idle
+    assert any(f["src_port"] == 5000 and f["end_reason"] == "idle timeout" for f in finished)
+    assert table.active[table._key("10.0.0.1", "10.0.0.2", 5000, 80, 17)].start == 15.5
+
+
+# 12. Packets discarded by the bounded buffer are counted and reported.
+def test_packet_buffer_counts_discarded_packets():
+    buffer = capture_worker.PacketBuffer(maxlen=3)
+    for i in range(5):
+        buffer.append(i)
+    assert buffer.dropped == 2 and len(buffer) == 3 and buffer.popleft() == 2
+
+
+def test_worker_reports_dropped_packets(monkeypatch):
+    import queue
+    import threading
+
+    snap = Snapshot(0.0, 0, 0, 0, 0)
+    monkeypatch.setattr(capture_worker, "read_snapshot", lambda interface: snap)
+    monkeypatch.setattr(capture_worker, "MAX_PENDING_PACKETS", 2)
+
+    class Sniffer:
+        running, exception = True, None
+
+        def __init__(self, interface, pending):
+            for i in range(5):
+                pending.append((float(i), "10.0.0.1", "10.0.0.2", 1, 2, 17, 10, 0))
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    out, stop = queue.Queue(), threading.Event()
+    stop.set()
+    capture_worker.run({"interface": "eth0", "mode": "packets", "interval_seconds": 1}, out, stop, Sniffer)
+    messages = [out.get_nowait() for _ in range(out.qsize())]
+    assert messages[-1]["type"] == "stopped" and messages[-1]["dropped_packets"] == 3
+
+
+# 13. A remembered forecast is only shown for the session and interface it was made for.
+def test_forecast_run_is_scoped_to_session_and_interface():
+    state = {}
+    remember(state, "last_forecast_run", (3, "eth0"), "run-3")
+    assert recall(state, "last_forecast_run", (3, "eth0")) == "run-3"
+    assert recall(state, "last_forecast_run", (5, "eth0")) is None
+    assert recall(state, "last_forecast_run", (3, "")) is None
+
+
+# 14. A counter that goes backwards gives no error/drop count, not 0.
+def test_counter_reset_gives_unavailable_nic_counts():
+    before = Snapshot(0.0, 100, 100, 10, 10, errin=50, errout=1, dropin=7, dropout=0)
+    after = Snapshot(1.0, 200, 200, 20, 20, errin=0, errout=1, dropin=9, dropout=0)  # errin reset
+    sample = rates(before, after)
+    assert sample["nic_errors"] is None and sample["nic_drops"] == 2
+
+
+# 15. Bracketed IPv6 latency targets are accepted; malformed brackets are not.
+def test_latency_target_accepts_bracketed_ipv6():
+    assert validate_latency_target("[2001:db8::1]:443") == ("2001:db8::1", 443)
+    assert validate_latency_target("192.168.1.1:443") == ("192.168.1.1", 443)
+    for bad in ("[2001:db8::1:443", "2001:db8::1]:443", "[evil host]:443", "[]:443"):
+        with pytest.raises(ValueError):
+            validate_latency_target(bad)

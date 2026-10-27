@@ -119,6 +119,7 @@ class LiveStatus:
     flows_scored: int = 0
     flagged: int = 0
     dropped_messages: int = 0
+    dropped_packets: int = 0
     active_flows: Optional[int] = None
     detection: Dict[str, Any] = field(default_factory=dict)
     last_error: Optional[str] = None
@@ -297,6 +298,22 @@ class LiveMonitor:
 
     # -------------------------------------------------------------- consume
     def _consume(self) -> None:
+        """Drain the worker queue. Any failure ends the capture in ERROR instead of leaving it RUNNING."""
+        try:
+            self._consume_loop()
+        except Exception as exc:  # e.g. database locked, model failure: report it, never stall silently
+            message = f"Live capture stopped because its data could not be saved: {type(exc).__name__}: {exc}"
+            self.status.last_error = message
+            if self._stop_event is not None:
+                self._stop_event.set()  # the worker exits on its own; nothing is reading its queue any more
+            with self._lock:
+                try:
+                    self._set_state(SessionState.ERROR, message[:500])
+                except Exception:
+                    self.status.state = SessionState.ERROR.value
+                self.status.running = False
+
+    def _consume_loop(self) -> None:
         metrics: List[Dict[str, Any]] = []
         flows: List[Dict[str, Any]] = []
         last_flush = time.monotonic()
@@ -318,6 +335,7 @@ class LiveMonitor:
                 elif kind == "metrics":
                     metrics.append(message)
                     self.status.dropped_messages = message.get("dropped_messages", 0)
+                    self.status.dropped_packets = message.get("dropped_packets", 0)
                     self.status.active_flows = message.get("active_flows")
                 elif kind == "flows":
                     flows.extend(message["flows"])
@@ -328,6 +346,7 @@ class LiveMonitor:
                     worker_done = True
                 elif kind == "stopped":
                     self.status.dropped_messages = message.get("dropped_messages", 0)
+                    self.status.dropped_packets = message.get("dropped_packets", self.status.dropped_packets)
                     worker_done = True
             due = time.monotonic() - last_flush >= FLUSH_SECONDS
             if (due or worker_done or self._consumer_stop.is_set()) and (metrics or flows):

@@ -61,6 +61,29 @@ def summarize_packet(packet) -> Optional[tuple]:
     return (float(packet.time), str(ip.src), str(ip.dst), sport, dport, proto, int(length), flags)
 
 
+class PacketBuffer:
+    """Bounded packet queue between the sniffer thread and the worker loop.
+
+    When full, the oldest packet is discarded (memory stays bounded) and counted,
+    so incomplete flows are reported instead of passing as complete.
+    """
+
+    def __init__(self, maxlen: Optional[int] = None):
+        self._items: collections.deque = collections.deque(maxlen=maxlen or MAX_PENDING_PACKETS)
+        self.dropped = 0
+
+    def append(self, item) -> None:
+        if len(self._items) == self._items.maxlen:
+            self.dropped += 1
+        self._items.append(item)
+
+    def popleft(self):
+        return self._items.popleft()
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+
 class _Sender:
     def __init__(self, out):
         self.out = out
@@ -84,7 +107,7 @@ def run(config: Dict[str, Any], out, stop_event, sniffer_factory=None) -> None:
             send.put({"type": "error", "message": f"Interface {interface} was not found on this machine."})
             return
         latency = validate_latency_target(config.get("latency_target") or None)
-        pending: collections.deque = collections.deque(maxlen=MAX_PENDING_PACKETS)
+        pending = PacketBuffer()
         table = FlowTable() if config["mode"] == "packets" else None
         if table is not None:
             sniffer = (sniffer_factory or _scapy_sniffer)(interface, pending)
@@ -116,14 +139,14 @@ def run(config: Dict[str, Any], out, stop_event, sniffer_factory=None) -> None:
                 if sample is not None:
                     sample["latency_ms"] = probe_latency_ms(*latency) if latency else None
                     send.put({"type": "metrics", "at": _iso(), "sample": sample, "dropped_messages": send.dropped,
-                              "pending_packets": len(pending), "active_flows": len(table.active) if table else None,
+                              "dropped_packets": pending.dropped, "pending_packets": len(pending), "active_flows": len(table.active) if table else None,
                               "flows_seen": flows_seen})
             stop_event.wait(0.2)
         if table is not None:
             remaining = table.flush()
             for start in range(0, len(remaining), FLOW_BATCH):
                 send.put({"type": "flows", "flows": remaining[start:start + FLOW_BATCH]})
-        send.put({"type": "stopped", "dropped_messages": send.dropped})
+        send.put({"type": "stopped", "dropped_messages": send.dropped, "dropped_packets": pending.dropped})
     except PermissionError as exc:
         send.put({"type": "error", "permission": True,
                   "message": f"Packet capture is not permitted on {interface}: {exc}. Interface-counter mode does "
@@ -138,13 +161,13 @@ def run(config: Dict[str, Any], out, stop_event, sniffer_factory=None) -> None:
                 pass
 
 
-def _scapy_sniffer(interface: str, pending: collections.deque):
+def _scapy_sniffer(interface: str, pending: PacketBuffer):
     from scapy.all import AsyncSniffer
 
     def on_packet(packet) -> None:
         summary = summarize_packet(packet)
         if summary is not None:
-            pending.append(summary)  # deque(maxlen) drops the oldest when full: memory stays bounded
+            pending.append(summary)  # drops (and counts) the oldest when full: memory stays bounded
 
     # Passive only: store=False, no send/sr calls anywhere in this project.
     return AsyncSniffer(iface=interface, filter="ip or ip6", store=False, prn=on_packet)

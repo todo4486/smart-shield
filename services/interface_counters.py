@@ -12,9 +12,10 @@ import re
 import socket
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 HOST_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,253}$")
+BRACKETED_RE = re.compile(r"^\[([0-9A-Fa-f:.]{2,45})\]$")
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,12 @@ def _delta(new: int, old: int) -> Optional[int]:
     return None if new < old else new - old
 
 
+def _sum_deltas(*pairs: Tuple[int, int]) -> Optional[int]:
+    """Sum of counter deltas, or None if any counter went backwards (never a 0 stand-in)."""
+    deltas = [_delta(new, old) for new, old in pairs]
+    return None if any(d is None for d in deltas) else sum(deltas)
+
+
 def rates(previous: Snapshot, current: Snapshot, capacity_bps: Optional[float] = None) -> Optional[Dict[str, object]]:
     elapsed = current.at - previous.at
     if elapsed <= 0:
@@ -82,19 +89,24 @@ def rates(previous: Snapshot, current: Snapshot, capacity_bps: Optional[float] =
         "utilization_ratio": utilization,
         "configured_capacity_bps": capacity_bps,
         "interval_seconds": elapsed,
-        "nic_errors": (_delta(current.errin, previous.errin) or 0) + (_delta(current.errout, previous.errout) or 0),
-        "nic_drops": (_delta(current.dropin, previous.dropin) or 0) + (_delta(current.dropout, previous.dropout) or 0),
+        "nic_errors": _sum_deltas((current.errin, previous.errin), (current.errout, previous.errout)),
+        "nic_drops": _sum_deltas((current.dropin, previous.dropin), (current.dropout, previous.dropout)),
     }
 
 
 def validate_latency_target(target: Optional[str]) -> Optional[tuple]:
-    """'host:port' -> (host, port). Used for an explicitly configured TCP connect-time probe."""
+    """'host:port' or '[ipv6]:port' -> (host, port). Used for an explicitly configured TCP connect-time probe."""
     if not target:
         return None
     host, _, port = target.strip().rpartition(":")
+    bracketed = BRACKETED_RE.match(host)
+    if bracketed:
+        host = bracketed.group(1)
+    elif "[" in host or "]" in host:
+        host = ""
     if not host or not HOST_RE.match(host) or not port.isdigit() or not 1 <= int(port) <= 65535:
-        raise ValueError("Latency target must look like host:port, e.g. 192.168.1.1:443.")
-    return host.strip("[]"), int(port)
+        raise ValueError("Latency target must look like host:port, e.g. 192.168.1.1:443 or [2001:db8::1]:443.")
+    return host, int(port)
 
 
 def probe_latency_ms(host: str, port: int, timeout: float = 2.0) -> Optional[float]:

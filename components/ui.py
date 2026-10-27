@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from html import escape
-from typing import Iterable, Optional, Sequence, Tuple
+from typing import Any, Iterable, MutableMapping, Optional, Sequence, Tuple
 
 import streamlit as st
 
@@ -135,3 +135,14 @@ def format_timestamp(value: Optional[str]) -> str:
     if not value:
         return "—"
     return value.replace("T", " ")[:19] + " UTC"
+
+
+def remember(state: MutableMapping, key: str, scope: tuple, value: Any) -> None:
+    """Keep a result in session state together with what it was computed for."""
+    state[key] = (scope, value)
+
+
+def recall(state: MutableMapping, key: str, scope: tuple) -> Any:
+    """The remembered result, but only if it was computed for this same scope (else None)."""
+    saved = state.get(key)
+    return saved[1] if isinstance(saved, tuple) and len(saved) == 2 and saved[0] == scope else None
