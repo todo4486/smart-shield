@@ -119,6 +119,18 @@ CREATE TABLE incident_alerts (
     PRIMARY KEY (incident_id, alert_id)
 );
 
+CREATE TABLE incident_events (
+    id           INTEGER PRIMARY KEY,
+    incident_id  INTEGER NOT NULL REFERENCES incidents (id) ON DELETE CASCADE,
+    event_type   TEXT    NOT NULL CHECK (event_type IN ('status_change', 'assignment', 'note')),
+    from_status  TEXT    CHECK (from_status IS NULL OR from_status IN ('open', 'investigating', 'resolved', 'closed')),
+    to_status    TEXT    CHECK (to_status IS NULL OR to_status IN ('open', 'investigating', 'resolved', 'closed')),
+    assigned_to  INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    note         TEXT    CHECK (note IS NULL OR length(note) <= 2000),
+    user_id      INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    created_at   TEXT    NOT NULL
+);
+
 CREATE TABLE incidents (
     id                         INTEGER PRIMARY KEY,
     title                      TEXT    NOT NULL CHECK (length(trim(title)) > 0),
@@ -133,7 +145,7 @@ CREATE TABLE incidents (
     created_by                 INTEGER REFERENCES users (id) ON DELETE SET NULL,
     created_at                 TEXT    NOT NULL,
     updated_at                 TEXT    NOT NULL
-, investigation_notes TEXT);
+, investigation_notes TEXT, assigned_to INTEGER REFERENCES users (id) ON DELETE SET NULL);
 
 CREATE TABLE login_attempts (
     id            INTEGER PRIMARY KEY,
@@ -278,6 +290,8 @@ CREATE INDEX idx_congestion_predictions_time ON congestion_predictions (timestam
 CREATE INDEX idx_datasets_uploaded ON datasets (uploaded_at);
 
 CREATE INDEX idx_incident_alerts_alert ON incident_alerts (alert_id);
+
+CREATE INDEX idx_incident_events_incident_time ON incident_events (incident_id, created_at);
 
 CREATE INDEX idx_incidents_created ON incidents (created_at);
 

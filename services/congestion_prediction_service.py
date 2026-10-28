@@ -330,3 +330,33 @@ def recent_predictions(principal: Principal, limit: int = 200) -> List[Dict[str,
         item["metadata"] = json.loads(row["prediction_metadata_json"]) if row["prediction_metadata_json"] else {}
         out.append(item)
     return out
+
+
+def congestion_outlook(forecasts: List[HorizonForecast], threshold: float, *,
+                       capacity_bps: Optional[float] = None, target: str = "utilization_ratio") -> Dict[str, Any]:
+    """Countdown for the forecast card (pure).
+
+    * "likely":   the earliest horizon whose predicted utilization reaches the threshold.
+    * "possible": no prediction reaches it, but a prediction's upper band (validation error, 90th percentile) does.
+    * "clear":    neither reaches it within the forecast window.
+    * "unavailable": no utilization can be judged (throughput target without a configured capacity).
+    """
+    def utilization(value: float) -> Optional[float]:
+        if target == "utilization_ratio":
+            return value
+        return value / capacity_bps if capacity_bps else None
+
+    ordered = sorted(forecasts, key=lambda f: f.horizon_seconds)
+    if not ordered or all(utilization(f.predicted_value) is None for f in ordered):
+        return {"status": "unavailable", "minutes": None,
+                "text": "Congestion outlook unavailable: no configured capacity to turn throughput into utilization."}
+    window = ordered[-1].horizon_seconds // 60
+    for f in ordered:
+        if (utilization(f.predicted_value) or 0) >= threshold:
+            return {"status": "likely", "minutes": f.horizon_seconds // 60,
+                    "text": f"Congestion likely in ~{f.horizon_seconds // 60} min"}
+    for f in ordered:
+        if (utilization(f.upper) or 0) >= threshold:
+            return {"status": "possible", "minutes": f.horizon_seconds // 60,
+                    "text": f"Congestion possible in ~{f.horizon_seconds // 60} min (upper error band)"}
+    return {"status": "clear", "minutes": None, "text": f"No congestion expected in the next {window} min"}

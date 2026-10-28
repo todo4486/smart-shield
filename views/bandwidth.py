@@ -5,6 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from components import waterfill
 from components.guard import require_principal
 from components.theme import COLORS, apply_chart_theme
 from components.ui import format_bits_rate, format_timestamp, kpi_tile, page_header, section_label
@@ -163,6 +164,10 @@ with recommend_tab:
                 with c4:
                     kpi_tile("Unmet demand", format_bits_rate(result.unmet_demand_bps), "derived",
                              "Reported, never hidden" if result.unmet_demand_bps else "All demand fits")
+                section_label("How the capacity was shared (water-filling)")
+                waterfill.render(result)
+                st.caption("Each tank is as tall as the class maximum or demand. Minimums are reserved first; then the "
+                           "leftover is shared by weight, and classes that need little fill up first.")
                 fig = go.Figure()
                 names = [a.name for a in result.allocations]
                 fig.add_trace(go.Bar(name="Recommended", x=names, y=[a.allocated_bps for a in result.allocations],

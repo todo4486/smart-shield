@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Dict, List, Sequence
+from typing import Any, Dict, List, Sequence
 
 MAX_ROUNDS = 1000
 EPSILON = 1e-9
@@ -65,6 +65,8 @@ class AllocationResult:
     rounds: int
     rationale: List[str] = field(default_factory=list)
     invariants: Dict[str, bool] = field(default_factory=dict)
+    # Allocation after the reservation step and after each sharing round, for the water-filling animation.
+    steps: List[Dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -114,6 +116,7 @@ def allocate(capacity_bps: float, safety_margin: float, classes: Sequence[Traffi
         f"{safety_margin:.0%} safety margin.",
         f"Step 1: reserved each class's minimum ({sum(allocation.values()) / 1e6:,.2f} Mbit/s in total).",
     ]
+    steps: List[Dict[str, Any]] = [{"label": "Minimums reserved", "allocations": dict(allocation)}]
     rounds = 0
     while remaining > EPSILON and rounds < MAX_ROUNDS:
         active = [c for c in ordered if ceiling[c.name] - allocation[c.name] > EPSILON]
@@ -128,6 +131,7 @@ def allocate(capacity_bps: float, safety_margin: float, classes: Sequence[Traffi
             allocation[c.name] += grant
             given += grant
         remaining -= given
+        steps.append({"label": f"Round {rounds}: leftover shared by weight", "allocations": dict(allocation)})
         if given <= EPSILON:
             break
     rationale.append(
@@ -185,6 +189,8 @@ def allocate(capacity_bps: float, safety_margin: float, classes: Sequence[Traffi
         capacity_bps=float(capacity_bps), safety_margin=float(safety_margin), usable_bps=usable_int,
         allocations=results, total_allocated_bps=total, total_demand_bps=float(sum(c.demand_bps for c in ordered)),
         unmet_demand_bps=unmet_total, unallocated_bps=unallocated, rounds=rounds, rationale=rationale,
+        steps=steps + [{"label": "Final (whole bits per second)",
+                        "allocations": {r.name: float(r.allocated_bps) for r in results}}],
     )
     result.invariants = check_invariants(result)
     if not all(result.invariants.values()):  # pragma: no cover - would be a bug in this module

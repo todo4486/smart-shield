@@ -9,7 +9,7 @@ import streamlit as st
 
 from components import severity
 from components.guard import require_principal
-from components.theme import COLORS, SERIES_COLORS, apply_chart_theme
+from components.theme import COLORS, MONO_FONT, SERIES_COLORS, apply_chart_theme, palette
 from components.ui import format_bits_rate, format_ratio, format_timestamp, kpi_tile, page_header, section_label
 from services import alert_service, incident_correlation_service as correlation
 from services.authorization import Permission, PermissionDenied
@@ -52,6 +52,94 @@ with c4:
 incidents_tab, alerts_tab, rules_tab = st.tabs(["Incidents", "All alerts", "How correlation works"])
 
 # ------------------------------------------------------------------ incidents
+NEW_GROUPS_KEY = "incident_center_new_groups"
+
+
+def _lane_chart(lanes: dict, incidents: list, new_ids: set, selected_id) -> go.Figure:
+    """Security and congestion swimlanes on one network-time axis, with incident brackets."""
+    fig = go.Figure()
+    lane_y = {"security": 1, "congestion": 0}
+    for lane, items in lanes.items():
+        for level in severity.LEVELS:
+            part = [a for a in items if severity.normalize(a["severity"]) == level]
+            if not part:
+                continue
+            xs, ys, texts = [], [], []
+            for a in part:
+                xs += [a["start"], a["end"], None]
+                ys += [lane_y[lane]] * 2 + [None]
+                group = f"incident #{a['incident_id']}" if a["incident_id"] else "not grouped yet"
+                texts += [f"Alert #{a['alert_id']} · {a['category']} · {severity.plain(a['severity'])}<br>"
+                          f"{a['type']} · {group} · {a['basis']}"] * 2 + [None]
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys, mode="lines+markers", line=dict(width=10, color=severity.COLORS[level]),
+                marker=dict(size=9, symbol={"info": "circle", "low": "circle", "medium": "triangle-up",
+                                            "high": "diamond", "critical": "x"}[level], color=severity.COLORS[level]),
+                name=severity.plain(level), legendgroup=level, showlegend=lane == "security" or not lanes["security"],
+                text=texts, hovertemplate="%{text}<extra></extra>", connectgaps=False))
+    for incident in incidents:
+        is_new, is_selected = incident["id"] in new_ids, incident["id"] == selected_id
+        color = COLORS["cyan"] if is_new else (COLORS["accent"] if is_selected else palette()["muted"])
+        fig.add_shape(type="rect", x0=incident["window_start"], x1=incident["window_end"], y0=-0.45, y1=1.45,
+                      line=dict(color=color, width=3 if (is_new or is_selected) else 1.2,
+                                dash="solid" if (is_new or is_selected) else "dot"),
+                      fillcolor=color, opacity=0.14 if is_new else 0.07, layer="below")
+        label = f"Incident #{incident['id']}" + (" · NEW" if is_new else "")
+        if incident["classification"] == "performance":
+            label += " · Not an attack"
+        fig.add_annotation(x=incident["window_start"], y=1.62, text=label, showarrow=False, xanchor="left",
+                           font=dict(size=11, color=color, family=MONO_FONT))
+    fig.update_layout(
+        title="Security vs congestion alerts · network time (UTC) · brackets = incidents",
+        yaxis=dict(tickvals=[0, 1], ticktext=["Congestion", "Security"], range=[-0.8, 1.9], showgrid=False),
+        hovermode="closest", legend=dict(orientation="h", x=0, xanchor="left", y=-0.18, yanchor="top"),
+        margin=dict(b=70, l=96))
+    return fig
+
+
+def _triage(incident) -> None:
+    if not principal.has(Permission.TRIAGE_ALERTS):
+        st.button("Acknowledge", disabled=True, help="Your role cannot triage incidents.")
+        return
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("Acknowledge", icon=":material/visibility:", width="stretch",
+                     disabled=incident.status != "open",
+                     help="Picks the incident up: open → investigating." if incident.status == "open"
+                     else "Only open incidents can be acknowledged."):
+            _run(lambda: correlation.acknowledge(principal, incident.id))
+    with c2:
+        users = correlation.assignable_users(principal)
+        by_uid = {None: "Unassigned", **{u["id"]: f"{u['name']} ({u['email']})" for u in users}}
+        options = list(by_uid)
+        current = incident.assigned_to if incident.assigned_to in by_uid else None
+        choice = st.selectbox("Assign to", options, index=options.index(current), format_func=lambda u: by_uid[u],
+                              key=f"assign_{incident.id}", label_visibility="collapsed",
+                              disabled=incident.status == "closed")
+        if choice != current:
+            _run(lambda: correlation.assign(principal, incident.id, choice))
+    with c3:
+        resolvable = "resolved" in correlation.TRANSITIONS[incident.status]
+        if st.button("Resolve", icon=":material/task_alt:", type="primary", width="stretch", disabled=not resolvable,
+                     help="Marks the incident resolved." if resolvable else "Already resolved or closed."):
+            _run(lambda: correlation.change_status(principal, incident.id, "resolved"))
+    others = sorted(correlation.TRANSITIONS[incident.status] - {"investigating", "resolved"})
+    if others:
+        with st.popover("More status changes"):
+            for target in others:
+                if st.button(f"Move to {target}", key=f"status_{incident.id}_{target}"):
+                    _run(lambda t=target: correlation.change_status(principal, incident.id, t))
+
+
+def _run(action) -> None:
+    try:
+        action()
+    except (IncidentError, PermissionDenied) as exc:
+        st.error(str(exc))
+    else:
+        st.rerun()
+
+
 with incidents_tab:
     if principal.has(Permission.RUN_DETECTION):
         with st.form("correlate_form", border=True):
@@ -65,34 +153,92 @@ with incidents_tab:
             except (IncidentError, PermissionDenied) as exc:
                 st.error(str(exc))
             else:
+                st.session_state[NEW_GROUPS_KEY] = set(result.incidents_created) | set(result.incidents_updated)
                 if not (result.incidents_created or result.incidents_updated):
                     st.info("Every unresolved alert is already part of an incident.")
                 else:
                     st.success(f"Linked {result.alerts_linked} alert(s): {len(result.incidents_created)} new "
-                               f"incident(s), {len(result.incidents_updated)} updated.")
+                               f"incident(s), {len(result.incidents_updated)} updated. They are highlighted below.")
     statuses = st.multiselect("Status", list(correlation.STATUSES), default=["open", "investigating"])
     incidents = correlation.list_incidents(principal, statuses or None)
-    if not incidents:
-        st.info("No incidents match. Incidents are created by correlating unresolved alerts. Run detection in the "
-                "Security Center or forecasts in the Congestion Center first.")
+
+    # Permalink: ?incident=42 selects that incident (still behind sign-in).
+    linked = st.query_params.get("incident")
+    linked_id = int(linked) if linked and linked.isdigit() else None
+    if linked_id is not None and all(i["id"] != linked_id for i in incidents):
+        try:
+            extra = correlation.get_incident(principal, linked_id)
+        except IncidentError:
+            st.warning(f"Incident #{linked_id} from the link does not exist.")
+        else:
+            incidents = [{"id": extra.id, "title": extra.title, "classification": extra.classification,
+                          "status": extra.status, "alert_count": len(extra.alerts),
+                          "window_start": extra.window_start, "window_end": extra.window_end,
+                          "assigned_email": extra.assigned_email,
+                          "top_severity": severity.highest(a.severity for a in extra.alerts)}] + incidents
+
+    lanes = correlation.swimlanes(principal)
+    if lanes["range"] is None:
+        st.info("No alerts yet. Run detection in the Security Center or forecasts in PredictNet, then correlate.")
     else:
-        st.dataframe(pd.DataFrame([{
-            "ID": i["id"], "Type": CLASS_STYLE.get(i["classification"], ("", i["classification"]))[1],
-            "Title": i["title"], "Status": i["status"], "Alerts": i["alert_count"],
-            "Window start": format_timestamp(i["window_start"]), "Window end": format_timestamp(i["window_end"]),
-        } for i in incidents]), hide_index=True)
+        new_ids = st.session_state.get(NEW_GROUPS_KEY, set())
+        st.plotly_chart(apply_chart_theme(_lane_chart(lanes["lanes"], lanes["incidents"], new_ids, linked_id),
+                                          height=330), theme=None, key="incident_lanes")
+        st.caption("Each bar is one alert's interval in network time; brackets show which alerts the correlation "
+                   "engine grouped. Congestion-only incidents are labelled **Not an attack**.")
+
+    if not incidents:
+        st.info("No incidents match. Incidents are created by correlating unresolved alerts.")
+    else:
         by_id = {i["id"]: i for i in incidents}
-        incident_id = st.selectbox("Investigate incident", list(by_id),
+        st.dataframe(pd.DataFrame([{
+            "ID": i["id"], "Severity": severity.plain(i.get("top_severity")),
+            "Type": CLASS_STYLE.get(i["classification"], ("", i["classification"]))[1]
+            + (" · Not an attack" if i["classification"] == "performance" else ""),
+            "Title": i["title"], "Status": i["status"], "Assigned": i.get("assigned_email") or "—",
+            "Alerts": i["alert_count"], "Window start": format_timestamp(i["window_start"]),
+        } for i in incidents]), hide_index=True)
+        ids = list(by_id)
+        incident_id = st.selectbox("Investigate incident", ids, index=ids.index(linked_id) if linked_id in by_id else 0,
                                    format_func=lambda i: f"#{i} · {by_id[i]['title']}")
+        if st.query_params.get("incident") != str(incident_id):
+            st.query_params["incident"] = str(incident_id)
         incident = correlation.get_incident(principal, incident_id)
         color, label = CLASS_STYLE.get(incident.classification, (COLORS["muted"], incident.classification))
+        top = severity.highest(a.severity for a in incident.alerts)
+        strength = correlation.evidence_strength(incident.alerts)
+        badges = severity.badge(top) if top else ""
+        if incident.not_an_attack:
+            badges += " <span class='ss-src ss-src-counters'>NOT AN ATTACK</span>"
         st.markdown(
             f"<div class='ss-card' style='border-left:4px solid {color}'><h4>#{incident.id} · {escape(label)} · "
-            f"{escape(incident.status)}</h4><p>{escape(incident.rationale)}</p></div>",
+            f"{escape(incident.status)} {badges}</h4><p>{escape(incident.rationale)}</p></div>",
             unsafe_allow_html=True,
         )
         st.caption(f"Time window (network time): {format_timestamp(incident.window_start)} → "
-                   f"{format_timestamp(incident.window_end)}")
+                   f"{format_timestamp(incident.window_end)} · Share this incident: copy the page address "
+                   f"(…?incident={incident.id}); it opens after sign-in.")
+
+        c1, c2, c3, c4 = st.columns(4)
+        security_alerts = [a for a in incident.alerts if a.alert_type in correlation.SECURITY_TYPES]
+        with c1:
+            kpi_tile("Member alerts", f"{len(incident.alerts):,}", "derived",
+                     f"{len(security_alerts)} security · {len(incident.alerts) - len(security_alerts)} congestion")
+        with c2:
+            kpi_tile("Highest severity", severity.plain(top) if top else None, "derived" if top else "unavailable",
+                     "Most severe member alert")
+        with c3:
+            kpi_tile("Evidence strength", strength["level"].title(), "derived", "Rule-based, not a probability")
+        with c4:
+            hosts = correlation.affected_hosts(incident.alerts)
+            kpi_tile("Affected hosts", f"{len(hosts):,}" if hosts else None, "measured" if hosts else "unavailable",
+                     ", ".join(hosts[:3]) if hosts else "Alerts name no hosts")
+        st.caption(" ".join(strength["reasons"]))
+
+        section_label("Triage")
+        st.caption(f"Assigned to: **{incident.assigned_email or 'nobody'}**. Acknowledge → assign → resolve; "
+                   "every step is recorded in the history and the audit log.")
+        _triage(incident)
 
         # Timeline: measured throughput around the window with each alert's interval.
         data = correlation.timeline(principal, incident)
@@ -139,6 +285,11 @@ with incidents_tab:
                     for name, c in changes.get("interfaces", {}).items()]
             if rows:
                 st.dataframe(pd.DataFrame(rows), hide_index=True)
+            section_label("Affected hosts and links")
+            interfaces = sorted({str(a.evidence.get("interface")) for a in incident.alerts
+                                 if a.evidence.get("interface") not in (None, "(all)")})
+            st.markdown("**Hosts:** " + (", ".join(f"`{h}`" for h in hosts[:12]) or "none named in the evidence"))
+            st.markdown("**Links:** " + (", ".join(f"`{i}`" for i in interfaces) or "none named in the evidence"))
             section_label("Model outputs")
             outputs = incident.model_outputs
             st.markdown("Alert models: " + (", ".join(f"`{m}`" for m in outputs.get("alert_models", [])) or "none"))
@@ -153,33 +304,33 @@ with incidents_tab:
         with right:
             section_label("Suggested investigation steps")
             st.markdown("\n".join(f"{n}. {step}" for n, step in enumerate(incident.steps, start=1)))
-            section_label("Related alerts")
+            section_label("Member alerts")
             st.dataframe(pd.DataFrame([{
                 "ID": a.id, "Type": a.alert_type, "Severity": severity.plain(a.severity), "Category": a.category,
                 "Status": a.status, "Model": a.model_version or "—"} for a in incident.alerts]), hide_index=True)
+            section_label("Analyst notes and history")
+            history = correlation.events(principal, incident.id)
+            if not history:
+                st.caption("No triage activity yet.")
+            for event in history:
+                who = event["user_email"] or "system"
+                when = format_timestamp(event["created_at"])
+                if event["event_type"] == "note":
+                    with st.chat_message("user", avatar=":material/person:"):
+                        st.markdown(f"**{who}** · {when}")
+                        st.text(event["note"])
+                elif event["event_type"] == "assignment":
+                    st.caption(f"{when} · {who} assigned it to **{event['assigned_email'] or 'nobody'}**")
+                else:
+                    st.caption(f"{when} · {who} moved it {event['from_status']} → **{event['to_status']}**"
+                               + (f": {event['note']}" if event["note"] else ""))
             if principal.has(Permission.TRIAGE_ALERTS):
-                options = sorted(correlation.TRANSITIONS[incident.status])
-                if options:
-                    with st.form(f"incident_status_{incident.id}", border=True):
-                        target = st.radio("Change status to", options, horizontal=True)
-                        note = st.text_area("Note (optional)", max_chars=2000, height=80)
-                        if st.form_submit_button("Update incident", type="primary"):
-                            try:
-                                correlation.change_status(principal, incident.id, target, note)
-                            except (IncidentError, PermissionDenied) as exc:
-                                st.error(str(exc))
-                            else:
-                                st.rerun()
                 with st.form(f"incident_note_{incident.id}", border=True, clear_on_submit=True):
-                    extra = st.text_area("Add investigation note", max_chars=2000, height=80)
-                    if st.form_submit_button("Add note"):
-                        try:
-                            correlation.add_note(principal, incident.id, extra)
-                        except (IncidentError, PermissionDenied) as exc:
-                            st.error(str(exc))
-                        else:
-                            st.rerun()
-            if incident.notes:
+                    extra = st.text_area("Add an analyst note", max_chars=2000, height=80)
+                    if st.form_submit_button("Add note", icon=":material/edit_note:"):
+                        _run(lambda: correlation.add_note(principal, incident.id, extra))
+            if incident.notes and not any(e["event_type"] == "note" for e in history):
+                st.caption("Notes recorded before the history was added:")
                 st.text(incident.notes)
 
 # ----------------------------------------------------------------- all alerts

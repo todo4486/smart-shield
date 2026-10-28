@@ -82,6 +82,13 @@ class Incident:
     created_at: str
     updated_at: str
     alerts: List[alert_service.Alert] = field(default_factory=list)
+    assigned_to: Optional[int] = None
+    assigned_email: Optional[str] = None
+
+    @property
+    def not_an_attack(self) -> bool:
+        """Congestion/performance evidence only: shown with a "Not an attack" badge."""
+        return self.classification == "performance"
 
 
 # ------------------------------------------------------------------ events
@@ -303,6 +310,8 @@ def _incident(row, alerts=None) -> Incident:
         steps=json.loads(row["investigation_steps_json"]) if row["investigation_steps_json"] else [],
         notes=row["investigation_notes"], created_at=row["created_at"], updated_at=row["updated_at"],
         alerts=alerts or [],
+        assigned_to=row["assigned_to"] if "assigned_to" in row.keys() else None,
+        assigned_email=row["assigned_email"] if "assigned_email" in row.keys() else None,
     )
 
 
@@ -352,6 +361,9 @@ def change_status(principal: Principal, incident_id: int, new_status: str, note:
             raise IncidentError(f"An incident cannot move from {row['status']} to {new_status}.")
         values: Dict[str, Any] = {"status": new_status, "updated_at": now}
         note = (note or "").strip()[:2000]
+        incident_repository.insert_event(conn, incident_id=incident_id, event_type="status_change",
+                                         from_status=row["status"], to_status=new_status, note=note or None,
+                                         user_id=principal.user_id, now=now)
         if note:
             values["investigation_notes"] = ((row["investigation_notes"] + "\n\n") if row["investigation_notes"] else "") + \
                 f"[{now[:16].replace('T', ' ')} UTC · {principal.email} · {row['status']} → {new_status}] {note}"
@@ -373,5 +385,127 @@ def add_note(principal: Principal, incident_id: int, note: str) -> None:
         notes = ((row["investigation_notes"] + "\n\n") if row["investigation_notes"] else "") + \
             f"[{now[:16].replace('T', ' ')} UTC · {principal.email}] {note}"
         incident_repository.update(conn, incident_id, {"investigation_notes": notes[-20000:], "updated_at": now})
+        incident_repository.insert_event(conn, incident_id=incident_id, event_type="note", note=note,
+                                         user_id=principal.user_id, now=now)
         audit_service.record(conn, user_id=principal.user_id, action="incident.add_note",
                              details={"incident_id": incident_id})
+
+
+# ------------------------------------------------------------------ triage
+
+def acknowledge(principal: Principal, incident_id: int, note: Optional[str] = None) -> None:
+    """Acknowledge = an analyst has picked the incident up (open → investigating)."""
+    change_status(principal, incident_id, "investigating", note)
+
+
+def assign(principal: Principal, incident_id: int, assignee_id: Optional[int]) -> None:
+    """Assign an incident to an active user (or unassign with None). Audited and kept in the history."""
+    require_permission(principal, Permission.TRIAGE_ALERTS, action="incident.assign",
+                       details={"incident_id": incident_id, "assignee_id": assignee_id})
+    now = utc_now_iso()
+    with database_service.session(write=True) as conn:
+        row = incident_repository.get(conn, incident_id)
+        if row is None:
+            raise IncidentError("Incident not found.")
+        if row["status"] == "closed":
+            raise IncidentError("A closed incident cannot be reassigned.")
+        if assignee_id is not None and not incident_repository.is_active_user(conn, assignee_id):
+            raise IncidentError("Incidents can only be assigned to an active user.")
+        if row["assigned_to"] == assignee_id:
+            return
+        incident_repository.update(conn, incident_id, {"assigned_to": assignee_id, "updated_at": now})
+        incident_repository.insert_event(conn, incident_id=incident_id, event_type="assignment",
+                                         assigned_to=assignee_id, user_id=principal.user_id, now=now)
+        audit_service.record(conn, user_id=principal.user_id, action="incident.assign",
+                             details={"incident_id": incident_id, "from": row["assigned_to"], "to": assignee_id})
+
+
+def assignable_users(principal: Principal) -> List[Dict[str, Any]]:
+    require_permission(principal, Permission.TRIAGE_ALERTS, action="incident.assign")
+    with database_service.session() as conn:
+        return [dict(r) for r in incident_repository.active_users(conn)]
+
+
+def events(principal: Principal, incident_id: int) -> List[Dict[str, Any]]:
+    """The incident's history: status changes, assignments and the analyst notes thread (oldest first)."""
+    require_permission(principal, Permission.VIEW_ALERTS, action="incident.view")
+    with database_service.session() as conn:
+        return [dict(r) for r in incident_repository.events(conn, incident_id)]
+
+
+def swimlanes(principal: Principal, start: Optional[datetime] = None, end: Optional[datetime] = None,
+              limit: int = 2000) -> Dict[str, Any]:
+    """The newest alerts split into a security lane and a congestion lane, plus the incidents grouping them.
+
+    Alerts are placed in network time (see event_for), so a range is applied after placing them. Without a
+    range, the span of the alerts themselves is used. Each alert carries the incident it belongs to, if any.
+    """
+    require_permission(principal, Permission.VIEW_ALERTS, action="incident.view")
+    lanes: Dict[str, List[Dict[str, Any]]] = {"security": [], "congestion": []}
+    with database_service.session() as conn:
+        membership = incident_repository.alert_incident_map(conn)
+        placed = [(row, event_for(row)) for row in incident_repository.latest_alerts(conn, limit)]
+        if placed and (start is None or end is None):
+            start = start or min(e.start for _, e in placed)
+            end = end or max(e.end for _, e in placed)
+        for row, e in placed:
+            if e.end < start or e.start > end:
+                continue
+            lane = "security" if e.alert_type in SECURITY_TYPES else "congestion"
+            lanes[lane].append({"alert_id": e.alert_id, "type": e.alert_type, "category": e.category,
+                                "severity": e.severity, "start": e.start, "end": e.end, "basis": e.basis,
+                                "status": row["status"], "incident_id": membership.get(e.alert_id)})
+        incidents = [dict(r) for r in incident_repository.incidents_overlapping(conn, to_iso(start), to_iso(end))] \
+            if placed else []
+    for lane in lanes.values():
+        lane.sort(key=lambda a: (a["start"], a["alert_id"]))
+    return {"lanes": lanes, "incidents": incidents, "range": [start, end] if placed else None}
+
+
+def affected_hosts(alerts: List[alert_service.Alert]) -> List[str]:
+    """Hosts named in the alerts' evidence (top sources and destinations, ports removed), most frequent first."""
+    counts: Dict[str, int] = {}
+    for alert in alerts:
+        for key in ("top_sources", "top_destinations"):
+            for item in alert.evidence.get(key) or []:
+                value = str(item.get("value", "")) if isinstance(item, dict) else str(item)
+                host = value.rsplit(":", 1)[0] if value.count(":") == 1 else value  # keep IPv6 addresses whole
+                if host:
+                    counts[host] = counts.get(host, 0) + int(item.get("flows", 1) if isinstance(item, dict) else 1)
+    return [h for h, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+
+def evidence_strength(alerts: List[alert_service.Alert]) -> Dict[str, Any]:
+    """Rule-based strength of an incident's evidence (not a probability).
+
+    * high:   a classifier (security) detection placed in network time
+    * medium: anomaly-only security evidence, or congestion forecasts placed in network time
+    * low:    every alert placed only by its creation time
+    """
+    if not alerts:
+        return {"level": "low", "reasons": ["No alerts are linked."]}
+    placed = [event_for(_alert_row(a)) for a in alerts]
+    network_time = [e for e in placed if e.basis == "network time"]
+    reasons = []
+    if any(e.alert_type == "security" for e in network_time):
+        level = "high"
+        reasons.append("A trained classifier flagged flows, placed by their own network time.")
+    elif network_time:
+        level = "medium"
+        if any(e.alert_type == "anomaly" for e in network_time):
+            reasons.append("Anomaly evidence only: unusual, not classified as an attack.")
+        if any(e.alert_type in PERFORMANCE_TYPES for e in network_time):
+            reasons.append("Congestion forecasts are model predictions placed by the data time they were made from.")
+    else:
+        level = "low"
+        reasons.append("Every alert is placed by its creation time, so grouping is approximate.")
+    if len(network_time) < len(placed):
+        reasons.append(f"{len(placed) - len(network_time)} alert(s) have no network timestamp.")
+    return {"level": level, "reasons": reasons}
+
+
+def _alert_row(alert: alert_service.Alert) -> Dict[str, Any]:
+    """The fields event_for needs, from an Alert object."""
+    return {"id": alert.id, "alert_type": alert.alert_type, "category": alert.category, "severity": alert.severity,
+            "created_at": alert.created_at, "model_version": alert.model_version,
+            "evidence_json": json.dumps(alert.evidence, default=str)}

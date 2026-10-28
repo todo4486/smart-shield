@@ -7,9 +7,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from components import charts
+from components import charts, severity
 from components.guard import require_principal
-from components.theme import COLORS, apply_chart_theme, palette
+from components.theme import COLORS, MONO_FONT, apply_chart_theme, palette
 from components.ui import (
     empty_state, format_bits_rate, format_bytes_rate, format_ratio, format_timestamp, kpi_tile, page_header, recall,
     remember, section_label,
@@ -76,6 +76,34 @@ with c4:
              f"Capacity {format_bits_rate(latest.get('configured_capacity_bps'))} (configured)"
              if pd.notna(latest.get("configured_capacity_bps")) else "Measured utilization")
 
+# Per-link risk gauges: the newest stored utilization of every link in this session.
+gauges = []
+for name in interfaces:
+    link_frame = frame if name == interface else telemetry_view_service.session_telemetry(principal, session_id, name).metrics
+    values = link_frame["utilization_ratio"].dropna() if "utilization_ratio" in link_frame else pd.Series(dtype=float)
+    gauges.append((name, None if values.empty else float(values.iloc[-1])))
+if any(v is not None for _, v in gauges):
+    section_label("Link risk (latest measured utilization)")
+    columns = st.columns(min(4, len(gauges)))
+    for n, (name, value) in enumerate(gauges):
+        with columns[n % len(columns)]:
+            if value is None:
+                kpi_tile(name or "(unnamed)", None, "unavailable", "No configured capacity, so no utilization")
+                continue
+            level = settings_service.risk_level(value, settings)
+            gauge = go.Figure(go.Indicator(
+                mode="gauge+number", value=value * 100, number=dict(suffix="%", valueformat=".1f",
+                                                                    font=dict(family=MONO_FONT, size=26)),
+                title=dict(text=f"{name or '(unnamed)'} · {severity.plain(level)}", font=dict(size=13)),
+                gauge=dict(axis=dict(range=[0, 100], ticksuffix="%"), bar=dict(color=RISK_COLORS.get(level)),
+                           steps=[dict(range=[settings.elevated_threshold * 100, settings.high_threshold * 100],
+                                       color="rgba(245,158,11,0.15)"),
+                                  dict(range=[settings.high_threshold * 100, settings.critical_threshold * 100],
+                                       color="rgba(249,115,22,0.18)"),
+                                  dict(range=[settings.critical_threshold * 100, 100], color="rgba(239,68,68,0.2)")])))
+            gauge.update_layout(margin=dict(l=20, r=20, t=50, b=10))
+            st.plotly_chart(apply_chart_theme(gauge, height=190), theme=None, key=f"gauge_{session_id}_{name}")
+
 if model is None:
     st.info("No forecaster is active. Train one under **ML Laboratory → PredictNet models**, then an administrator "
             "activates it.")
@@ -88,6 +116,44 @@ st.caption(f"Active forecaster **{model.version}** · {TARGETS[target]} · {meta
            f"horizons {', '.join(f'{h // 60} min' for h in horizons)} · trained on session #{meta['session_id']}.")
 
 # ----------------------------------------------------------------- forecast
+def _forecast_figure(run, history: pd.DataFrame) -> go.Figure:
+    """Measured past + forecast with its error band, threshold lines and a 'now' marker."""
+    base = pd.to_datetime(run.base_time, utc=True)
+    column = run.target
+    past = history[["timestamp", column]].dropna() if column in history else pd.DataFrame(columns=["timestamp", column])
+    past = past[past["timestamp"] <= base].tail(72)
+    current = float(past[column].iloc[-1]) if not past.empty else None
+    xs = [base] + [pd.to_datetime(f.target_time, utc=True) for f in run.forecasts]
+    ys = [current] + [f.predicted_value for f in run.forecasts]
+    lower = [current] + [f.lower for f in run.forecasts]
+    upper = [current] + [f.upper for f in run.forecasts]
+    if current is None:
+        xs, ys, lower, upper = xs[1:], ys[1:], lower[1:], upper[1:]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=past["timestamp"], y=past[column], mode="lines", name="Measured (past)",
+                             line=dict(color=palette()["text"], width=1.6), connectgaps=False))
+    fig.add_trace(go.Scatter(x=xs + xs[::-1], y=upper + lower[::-1], fill="toself", fillcolor="rgba(59,130,246,0.16)",
+                             line=dict(width=0), hoverinfo="skip", name="Typical error band (residual-based)"))
+    fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines+markers", name="Forecast (predicted)",
+                             line=dict(color=COLORS["accent"], width=2.4, dash="dot"), marker=dict(size=8)))
+    scale = 1.0 if column == "utilization_ratio" else run.capacity_bps
+    if scale:
+        for name, value, color in (("elevated", settings.elevated_threshold, COLORS["warn"]),
+                                   ("high", settings.high_threshold, COLORS["high"]),
+                                   ("critical", settings.critical_threshold, COLORS["critical"])):
+            fig.add_hline(y=value * scale, line=dict(color=color, width=1, dash="dash"),
+                          annotation_text=f"{name} {value:.0%}", annotation_position="top left",
+                          annotation_font=dict(size=10, color=color))
+    fig.add_vline(x=base, line=dict(color=COLORS["cyan"], width=1.5))
+    fig.add_annotation(x=base, y=1.04, yref="paper", text="Now (latest data)", showarrow=False,
+                       font=dict(size=10, color=COLORS["cyan"]))
+    fig.update_layout(title=f"{TARGETS[column]}: measured past and forecast · UTC", hovermode="x unified",
+                      legend=dict(orientation="h", x=0, xanchor="left", y=-0.15, yanchor="top"), margin=dict(b=80))
+    if column == "utilization_ratio":
+        fig.update_yaxes(tickformat=".0%")
+    return fig
+
+
 forecast_tab, backtest_tab, history_tab, metrics_tab = st.tabs(
     ["Forecast & risk", "Forecast vs actual", "Congestion history", "Model evaluation"]
 )
@@ -120,6 +186,16 @@ with forecast_tab:
                          f"Risk: {f.risk.level.upper()} · typical error ±"
                          + (f"{(f.upper - f.predicted_value):.1%}" if target == "utilization_ratio"
                             else format_bits_rate(f.upper - f.predicted_value)))
+        outlook = congestion_prediction_service.congestion_outlook(
+            run.forecasts, settings.high_threshold, capacity_bps=run.capacity_bps, target=run.target)
+        outlook_level = {"likely": "high", "possible": "medium", "clear": "low", "unavailable": "info"}[outlook["status"]]
+        st.markdown(f"<div class='ss-card' style='border-left:4px solid {severity.COLORS[outlook_level]};margin:.6rem 0'>"
+                    f"<h4>{severity.badge(outlook_level, outlook['status'].upper())} &nbsp;{escape(outlook['text'])}</h4>"
+                    f"<p>Judged against the configured high threshold ({settings.high_threshold:.0%}). Predicted, not "
+                    "measured.</p></div>", unsafe_allow_html=True)
+        st.plotly_chart(apply_chart_theme(_forecast_figure(run, frame), height=380), theme=None)
+        st.caption("Shaded band: the model's 90th-percentile absolute error on held-out validation data (residual-based, "
+                   "not a calibrated probability interval).")
         worst = max(run.forecasts, key=lambda f: ["unknown", "normal", "elevated", "high", "critical"].index(f.risk.level))
         color = RISK_COLORS.get(worst.risk.level, COLORS["muted"])
         reasons = "".join(f"<li>{escape(r)}</li>" for r in worst.risk.reasons)
@@ -209,5 +285,22 @@ with metrics_tab:
                      "Test R²": "—" if chosen["test"]["r2"] is None else f"{chosen['test']['r2']:.3f}",
                      "Best baseline MAE": fmt(baseline["test"]["mae"]), "Test samples": chosen["test"]["n"]})
     st.dataframe(pd.DataFrame(rows), hide_index=True)
+    comparison = go.Figure()
+    per_horizon = model.metrics.get("per_horizon", {})
+    for name, color in (("last_value", COLORS["muted"]), ("moving_average", "#A78BFA"),
+                        ("random_forest", COLORS["ok"]), ("hist_gradient_boosting", COLORS["accent"])):
+        values = [(label, h["candidates"][name]["test"]["mae"]) for label, h in per_horizon.items()
+                  if name in h["candidates"]]
+        if values:
+            comparison.add_trace(go.Bar(x=[v[0] for v in values], y=[v[1] for v in values],
+                                        name=name.replace("_", " ") + (" (baseline)" if name in ("last_value",
+                                                                                                  "moving_average") else ""),
+                                        marker_color=color))
+    if comparison.data:
+        comparison.update_layout(barmode="group", title="Test MAE by horizon: model vs baselines (lower is better)",
+                                 legend=dict(orientation="h", x=0, xanchor="left", y=-0.15, yanchor="top"))
+        if target == "utilization_ratio":
+            comparison.update_yaxes(tickformat=".1%")
+        st.plotly_chart(apply_chart_theme(comparison, height=320), theme=None)
     st.caption(f"Trained on {format_timestamp(meta['training_period'][0])} → {format_timestamp(meta['training_period'][1])} "
                f"with a chronological 70/15/15 split. Minimum history: {meta['minimum_history_samples']} samples.")

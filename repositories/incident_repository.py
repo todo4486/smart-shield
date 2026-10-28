@@ -32,7 +32,7 @@ def insert(conn: sqlite3.Connection, values: Dict[str, Any]) -> int:
 def update(conn: sqlite3.Connection, incident_id: int, values: Dict[str, Any]) -> None:
     allowed = ("title", "classification", "status", "window_start", "window_end", "measured_changes_json",
                "model_outputs_json", "correlation_rationale", "investigation_steps_json", "updated_at",
-               "investigation_notes")
+               "investigation_notes", "assigned_to")
     keys = [k for k in values if k in allowed]
     conn.execute(f"UPDATE incidents SET {', '.join(f'{k} = ?' for k in keys)} WHERE id = ?",
                  tuple(values[k] for k in keys) + (incident_id,))
@@ -43,7 +43,9 @@ def link(conn: sqlite3.Connection, incident_id: int, alert_id: int) -> None:
 
 
 def get(conn: sqlite3.Connection, incident_id: int) -> Optional[sqlite3.Row]:
-    return conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+    return conn.execute(
+        "SELECT i.*, u.email AS assigned_email FROM incidents i LEFT JOIN users u ON u.id = i.assigned_to "
+        "WHERE i.id = ?", (incident_id,)).fetchone()
 
 
 def alerts_for(conn: sqlite3.Connection, incident_id: int) -> List[sqlite3.Row]:
@@ -53,8 +55,12 @@ def alerts_for(conn: sqlite3.Connection, incident_id: int) -> List[sqlite3.Row]:
 
 
 def list_incidents(conn: sqlite3.Connection, statuses: Optional[List[str]] = None, limit: int = 300) -> List[sqlite3.Row]:
-    sql = ("SELECT i.*, (SELECT COUNT(*) FROM incident_alerts ia WHERE ia.incident_id = i.id) AS alert_count "
-           "FROM incidents i")
+    sql = ("SELECT i.*, u.email AS assigned_email, "
+           "(SELECT COUNT(*) FROM incident_alerts ia WHERE ia.incident_id = i.id) AS alert_count, "
+           "(SELECT a.severity FROM incident_alerts ia JOIN alerts a ON a.id = ia.alert_id WHERE ia.incident_id = i.id "
+           " ORDER BY CASE a.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END "
+           " LIMIT 1) AS top_severity "
+           "FROM incidents i LEFT JOIN users u ON u.id = i.assigned_to")
     params: list = []
     if statuses:
         sql += f" WHERE i.status IN ({', '.join('?' for _ in statuses)})"
@@ -84,3 +90,42 @@ def latest_recommendation_for(conn: sqlite3.Connection, interface: Optional[str]
     return conn.execute(
         "SELECT id, timestamp, status, unmet_demand_bps FROM bandwidth_recommendations WHERE interface_name = ? "
         "ORDER BY timestamp DESC, id DESC LIMIT 1", (interface,)).fetchone()
+
+
+def insert_event(conn: sqlite3.Connection, *, incident_id: int, event_type: str, user_id: Optional[int], now: str,
+                 from_status: Optional[str] = None, to_status: Optional[str] = None,
+                 assigned_to: Optional[int] = None, note: Optional[str] = None) -> None:
+    conn.execute(
+        "INSERT INTO incident_events (incident_id, event_type, from_status, to_status, assigned_to, note, user_id, "
+        "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (incident_id, event_type, from_status, to_status, assigned_to, note, user_id, now))
+
+
+def events(conn: sqlite3.Connection, incident_id: int) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT e.*, actor.email AS user_email, target.email AS assigned_email FROM incident_events e "
+        "LEFT JOIN users actor ON actor.id = e.user_id LEFT JOIN users target ON target.id = e.assigned_to "
+        "WHERE e.incident_id = ? ORDER BY e.created_at, e.id", (incident_id,)).fetchall()
+
+
+def is_active_user(conn: sqlite3.Connection, user_id: int) -> bool:
+    row = conn.execute("SELECT is_active FROM users WHERE id = ?", (user_id,)).fetchone()
+    return bool(row and row["is_active"])
+
+
+def active_users(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    return conn.execute("SELECT id, name, email, role FROM users WHERE is_active = 1 ORDER BY name, id").fetchall()
+
+
+def alert_incident_map(conn: sqlite3.Connection) -> Dict[int, int]:
+    return {r["alert_id"]: r["incident_id"] for r in conn.execute("SELECT alert_id, incident_id FROM incident_alerts")}
+
+
+def latest_alerts(conn: sqlite3.Connection, limit: int = 2000) -> List[sqlite3.Row]:
+    return conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+
+def incidents_overlapping(conn: sqlite3.Connection, start: str, end: str) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT id, title, classification, status, window_start, window_end FROM incidents "
+        "WHERE window_end >= ? AND window_start <= ? ORDER BY window_start, id", (start, end)).fetchall()

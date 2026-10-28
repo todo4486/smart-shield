@@ -56,6 +56,7 @@ else:
         "Monitor": [
             st.Page("views/overview.py", title="Overview", icon=":material/space_dashboard:", default=True),
             st.Page("views/live_monitoring.py", title="Live Monitoring", icon=":material/monitor_heart:"),
+            st.Page("views/network_map.py", title="Network Map", icon=":material/hub:"),
             st.Page("views/incident_center.py", title="Incident Center", icon=":material/crisis_alert:"),
         ],
         "Intelligence": [
@@ -77,5 +78,12 @@ else:
     navigation = st.navigation(sections, position="sidebar", expanded=True)
     render_sidebar(principal)
     render_header(principal)
+    # Incident permalinks (?incident=42): the page path is lost while signing in (only the login page exists
+    # then), so a signed-in visit carrying the parameter is taken to the Incident Center once.
+    incident_link = st.query_params.get("incident")
+    if incident_link and st.session_state.get("followed_incident_link") != incident_link:
+        st.session_state["followed_incident_link"] = incident_link
+        if navigation.url_path != "incident_center":
+            st.switch_page("views/incident_center.py", query_params={"incident": incident_link})
 
 navigation.run()
