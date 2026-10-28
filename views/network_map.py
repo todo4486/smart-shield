@@ -11,7 +11,7 @@ from components.ui import (
     SOURCE_LABELS, empty_state, format_bits_rate, format_ratio, format_timestamp, kpi_tile, page_header,
     section_label, source_badge,
 )
-from services import live_monitor_service, network_map_service
+from services import live_monitor_service, network_map_service, replay_service
 from services.authorization import Permission
 from services.network_map_service import OTHERS, MapError, MapFilters
 
@@ -50,7 +50,11 @@ min_sev = g2.selectbox("Minimum alert severity", [None, "low", "medium", "high",
 only_incidents = g3.toggle("Only hosts with incidents")
 
 
-@st.fragment(run_every=5 if live.running and live.session_id == session_id else None)
+replay = replay_service.status_copy()
+growing = (live.running and live.session_id == session_id) or (replay.running and replay.session_id == session_id)
+
+
+@st.fragment(run_every=5 if growing else None)
 def render_map() -> None:
     status = live_monitor_service.get_monitor().status
     try:

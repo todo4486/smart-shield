@@ -29,8 +29,9 @@ st.set_page_config(
 def _prepare_database(db_path: str) -> str:
     """Run pending migrations once per process and database file."""
     database_service.run_migrations(db_path)
-    # No capture worker survives a server restart, so close live sessions left open by a previous process.
-    monitoring_service.recover_interrupted_sessions()
+    # No capture worker or replay survives a server restart, so close sessions left open by a previous process.
+    monitoring_service.recover_interrupted_sessions("live_capture")
+    monitoring_service.recover_interrupted_sessions("replay")
     return db_path
 
 
@@ -58,6 +59,7 @@ else:
             st.Page("views/live_monitoring.py", title="Live Monitoring", icon=":material/monitor_heart:"),
             st.Page("views/network_map.py", title="Network Map", icon=":material/hub:"),
             st.Page("views/incident_center.py", title="Incident Center", icon=":material/crisis_alert:"),
+            st.Page("views/replay.py", title="Replay / demo", icon=":material/play_circle:"),
         ],
         "Intelligence": [
             st.Page("views/security_center.py", title="Smart Shield Security", icon=":material/security:"),
@@ -67,6 +69,7 @@ else:
         ],
         "Workspace": [
             st.Page("views/reports.py", title="Reports", icon=":material/description:"),
+            st.Page("views/how_it_works.py", title="How it works", icon=":material/school:"),
             st.Page("views/settings.py", title="Settings", icon=":material/settings:"),
             st.Page("views/account.py", title="My account", icon=":material/person:"),
         ],

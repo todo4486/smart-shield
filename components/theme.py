@@ -88,7 +88,7 @@ _LIGHT_CSS = """:root { --ss-bg: #F5F7FB; --ss-card: #FFFFFF; --ss-sidebar: #EEF
 .ss-src-dataset, .ss-chip-derived { color: #1D4ED8; } .ss-src-replay, .ss-chip-configured { color: #92400E; }
 .ss-chip-predicted { color: #6D28D9; } .ss-banner-replay { color: #92400E; }
 .ss-role-admin { color: #B91C1C; } .ss-role-analyst { color: #1D4ED8; } .ss-step-num { color: #1D4ED8; }
-.ss-planned .ss-phase { color: #92400E; }"""
+.ss-planned .ss-phase { color: #92400E; } .ss-mitre { color: #6D28D9; }"""
 
 _REDUCED_MOTION_CSS = "*, *::before, *::after { animation: none !important; transition: none !important; }"
 

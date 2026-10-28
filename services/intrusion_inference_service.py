@@ -93,6 +93,43 @@ def _resolve_model(principal: Principal, family: str, model_id: Optional[int]) -
     return model_registry_service.active_model(principal, family)
 
 
+@dataclass
+class Verdicts:
+    """Per-row detection output, aligned with the scored frame's index."""
+    scores: pd.Series  # classifier score (share of trees voting attack), uncalibrated
+    flagged: pd.Series
+    category: pd.Series  # "" for rows nobody flagged
+    anomaly_scores: Optional[pd.Series]
+    anomaly_only: pd.Series
+
+
+def score_frame(frame: pd.DataFrame, classifier: Dict[str, Any], detector: Optional[Dict[str, Any]]) -> Verdicts:
+    """Run the registered classifier (and anomaly detector, if given) over rows that have every feature.
+
+    Shared by dataset detection and replay so both make exactly the same decisions.
+    """
+    features = numeric_feature_frame(frame, classifier["feature_names"])
+    scores = pd.Series(classifier["model"].predict_proba(features)[:, 1], index=frame.index)
+    flagged = scores >= classifier["score_threshold"]
+    category = pd.Series("", index=frame.index, dtype=object)
+    attack_model = classifier.get("attack_type_model")
+    if flagged.any():
+        if attack_model is not None:
+            predicted = attack_model.predict(features[flagged.to_numpy()])
+            # The type model may still say BENIGN for a flagged row; keep it flagged as an unclassified attack.
+            category[flagged] = np.where(predicted == "BENIGN", "Attack (unclassified)", predicted)
+        else:
+            category[flagged] = "Attack (unclassified)"
+    anomaly_scores = None
+    anomaly_only = pd.Series(False, index=frame.index)
+    if detector is not None:
+        anomaly_features = numeric_feature_frame(frame, detector["feature_names"])
+        anomaly_scores = pd.Series(detector["model"].score_samples(anomaly_features), index=frame.index)
+        anomaly_only = (anomaly_scores < detector["threshold"]) & ~flagged
+        category[anomaly_only] = "Anomalous flows"
+    return Verdicts(scores, flagged, category, anomaly_scores, anomaly_only)
+
+
 def check_compatibility(principal: Principal, dataset_id: int, model_id: Optional[int] = None) -> CompatibilityReport:
     require_permission(principal, Permission.VIEW_DASHBOARD, action="model.compatibility")
     record = _resolve_model(principal, "intrusion_classifier", model_id)
@@ -202,27 +239,9 @@ def _run(principal: Principal, options: DetectionOptions) -> DetectionReport:
     frame = load_dataset_frame(path, max_rows=options.max_rows)
     if dataset["row_count"] > options.max_rows:
         warnings.append(f"Scored the first {options.max_rows:,} of {dataset['row_count']:,} rows (row limit).")
-    features = numeric_feature_frame(frame, classifier["feature_names"])
-    scores = pd.Series(classifier["model"].predict_proba(features)[:, 1], index=frame.index)
-    flagged = scores >= classifier["score_threshold"]
-
-    category = pd.Series("", index=frame.index, dtype=object)
-    attack_model = classifier.get("attack_type_model")
-    if flagged.any():
-        if attack_model is not None:
-            predicted = attack_model.predict(features[flagged.to_numpy()])
-            # The type model may still say BENIGN for a flagged row; keep it flagged as an unclassified attack.
-            category[flagged] = np.where(predicted == "BENIGN", "Attack (unclassified)", predicted)
-        else:
-            category[flagged] = "Attack (unclassified)"
-
-    anomaly_scores = None
-    anomaly_only = pd.Series(False, index=frame.index)
-    if detector is not None:
-        anomaly_features = numeric_feature_frame(frame, detector["feature_names"])
-        anomaly_scores = pd.Series(detector["model"].score_samples(anomaly_features), index=frame.index)
-        anomaly_only = (anomaly_scores < detector["threshold"]) & ~flagged
-        category[anomaly_only] = "Anomalous flows"
+    verdicts = score_frame(frame, classifier, detector)
+    scores, flagged, category = verdicts.scores, verdicts.flagged, verdicts.category
+    anomaly_scores, anomaly_only = verdicts.anomaly_scores, verdicts.anomaly_only
 
     labels = frame[LABEL_COLUMN].astype(str) if LABEL_COLUMN in frame.columns else None
     ground_truth = None
@@ -278,7 +297,8 @@ def _run(principal: Principal, options: DetectionOptions) -> DetectionReport:
                     category.at[idx],
                     None if anomaly_scores is None else float(anomaly_scores.at[idx]),
                     classifier_record.id, classifier_record.version,
-                    json.dumps({"dataset_label": labels.at[idx] if labels is not None else None,
+                    json.dumps({"dataset_row": int(idx) + 2,
+                                "dataset_label": labels.at[idx] if labels is not None else None,
                                 "model_score_uncalibrated": round(float(scores.at[idx]), 4)}),
                     "measured",
                 ))

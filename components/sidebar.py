@@ -39,6 +39,8 @@ def render_sidebar(principal: Principal) -> None:
         if status.interface_name:
             source += f" · {status.interface_name}"
         detail = f"Last session: {source}"
+    # A replay is not monitoring: say what is actually running.
+    heading = "Replay" if status.source_type == "replay" else "Monitoring"
 
     with st.sidebar:
         st.divider()
@@ -52,7 +54,7 @@ def render_sidebar(principal: Principal) -> None:
         st.write("")
         section_label("System")
         st.markdown(
-            f"<div class='ss-status'><span class='ss-dot {dot}'></span><div>Monitoring: {escape(label)}"
+            f"<div class='ss-status'><span class='ss-dot {dot}'></span><div>{escape(heading)}: {escape(label)}"
             f"<small>{escape(detail)}</small></div></div>"
             f"<div class='ss-status'><span class='ss-dot ss-dot-ok'></span><div>Database online"
             f"<small>Schema version {escape(schema_version or 'none')}</small></div></div>",

@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from components import severity
+from components import mitre, severity
 from components.guard import require_principal
 from components.theme import COLORS, MONO_FONT, SERIES_COLORS, apply_chart_theme, palette
 from components.ui import format_bits_rate, format_ratio, format_timestamp, kpi_tile, page_header, section_label
@@ -196,6 +196,7 @@ with incidents_tab:
             "Type": CLASS_STYLE.get(i["classification"], ("", i["classification"]))[1]
             + (" · Not an attack" if i["classification"] == "performance" else ""),
             "Title": i["title"], "Status": i["status"], "Assigned": i.get("assigned_email") or "—",
+            "Source": "DATASET REPLAY" if i.get("is_replay") else "Captured / imported",
             "Alerts": i["alert_count"], "Window start": format_timestamp(i["window_start"]),
         } for i in incidents]), hide_index=True)
         ids = list(by_id)
@@ -210,9 +211,14 @@ with incidents_tab:
         badges = severity.badge(top) if top else ""
         if incident.not_an_attack:
             badges += " <span class='ss-src ss-src-counters'>NOT AN ATTACK</span>"
+        if incident.is_replay:
+            badges += " <span class='ss-src ss-src-replay'>DATASET REPLAY</span>"
+        attack_labels = [a.category for a in incident.alerts if a.alert_type == "security"]
+        techniques = mitre.incident_badges(attack_labels)
         st.markdown(
             f"<div class='ss-card' style='border-left:4px solid {color}'><h4>#{incident.id} · {escape(label)} · "
-            f"{escape(incident.status)} {badges}</h4><p>{escape(incident.rationale)}</p></div>",
+            f"{escape(incident.status)} {badges}</h4><p>{escape(incident.rationale)}</p>"
+            + (f"<div style='margin-top:.5rem'>{techniques}</div>" if techniques else "") + "</div>",
             unsafe_allow_html=True,
         )
         st.caption(f"Time window (network time): {format_timestamp(incident.window_start)} → "

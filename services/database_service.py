@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 BUSY_TIMEOUT_MS = 5000
 MIGRATION_FILE_RE = re.compile(r"^(\d{3})_([a-z0-9_]+)\.sql$")
+# A migration that rebuilds a parent table starts with this line. Foreign keys are switched off for it
+# (PRAGMA foreign_keys cannot change inside a transaction), so DROP TABLE does not cascade to child rows,
+# and PRAGMA foreign_key_check must come back empty before it commits.
+FOREIGN_KEYS_OFF_MARKER = "-- requires: foreign_keys_off"
 
 SCHEMA_HEADER = (
     "-- GENERATED FILE. DO NOT EDIT.\n"
@@ -134,7 +138,11 @@ def run_migrations(db_path: Optional[PathLike] = None, directory: Path = MIGRATI
     try:
         _ensure_migrations_table(conn)
         for version, name, path in discover_migrations(directory):
-            statements = split_sql_statements(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            statements = split_sql_statements(text)
+            fk_off = _needs_foreign_keys_off(text)
+            if fk_off:
+                conn.execute("PRAGMA foreign_keys = OFF")
             conn.execute("BEGIN IMMEDIATE")
             try:
                 # Re-check inside the write lock in case another process just applied it.
@@ -146,6 +154,8 @@ def run_migrations(db_path: Optional[PathLike] = None, directory: Path = MIGRATI
                     continue
                 for statement in statements:
                     conn.execute(statement)
+                if fk_off:
+                    _check_foreign_keys(conn)
                 conn.execute(
                     "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
                     (version, name, utc_now_iso()),
@@ -155,11 +165,25 @@ def run_migrations(db_path: Optional[PathLike] = None, directory: Path = MIGRATI
                 if conn.in_transaction:
                     conn.execute("ROLLBACK")
                 raise MigrationError(f"Migration {path.name} failed: {exc}") from exc
+            finally:
+                if fk_off:
+                    conn.execute("PRAGMA foreign_keys = ON")
             logger.info("Applied migration %s_%s", version, name)
             newly_applied.append(version)
     finally:
         conn.close()
     return newly_applied
+
+
+def _needs_foreign_keys_off(text: str) -> bool:
+    return text.lstrip().startswith(FOREIGN_KEYS_OFF_MARKER)
+
+
+def _check_foreign_keys(conn: sqlite3.Connection) -> None:
+    broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if broken:
+        raise MigrationError(f"Foreign key check failed after a table rebuild ({len(broken)} row(s), first: "
+                             f"{tuple(broken[0])}); nothing was changed.")
 
 
 def current_schema_version(db_path: Optional[PathLike] = None) -> Optional[str]:
@@ -192,7 +216,9 @@ def generate_schema_sql(directory: Path = MIGRATIONS_DIR) -> str:
     try:
         _ensure_migrations_table(conn)
         for _, _, path in discover_migrations(directory):
-            for statement in split_sql_statements(path.read_text(encoding="utf-8")):
+            text = path.read_text(encoding="utf-8")
+            conn.execute(f"PRAGMA foreign_keys = {'OFF' if _needs_foreign_keys_off(text) else 'ON'}")
+            for statement in split_sql_statements(text):
                 conn.execute(statement)
         return dump_schema_from_connection(conn)
     finally:

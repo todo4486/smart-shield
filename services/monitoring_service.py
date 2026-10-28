@@ -30,6 +30,7 @@ class SourceType(str, Enum):
     HISTORICAL_IMPORT = "historical_import"
     FLOW_IMPORT = "flow_import"
     LIVE_CAPTURE = "live_capture"
+    REPLAY = "replay"  # a labelled dataset replayed through the pipeline (DATASET REPLAY, never live)
 
 
 ALLOWED_TRANSITIONS = {
@@ -150,14 +151,19 @@ def delete_session(principal: Principal, session_id: int) -> None:
         )
 
 
-def recover_interrupted_sessions() -> int:
-    """Live sessions left STARTING/RUNNING/STOPPING by a previous app process cannot still be running."""
+def recover_interrupted_sessions(source_type: str = "live_capture") -> int:
+    """Sessions of this type left STARTING/RUNNING/STOPPING by a previous app process cannot still be running.
+
+    Called once per type by the singleton that owns it (live monitor, replay engine), so creating one never
+    closes a session the other is running.
+    """
+    what = "replay" if source_type == SourceType.REPLAY.value else "capture"
     with database_service.session(write=True) as conn:
         rows = conn.execute(
-            "SELECT id, status FROM monitoring_sessions WHERE source_type = 'live_capture' "
-            "AND status IN ('STARTING', 'RUNNING', 'STOPPING')"
+            "SELECT id, status FROM monitoring_sessions WHERE source_type = ? "
+            "AND status IN ('STARTING', 'RUNNING', 'STOPPING')", (SourceType(source_type).value,)
         ).fetchall()
         for row in rows:
             transition(conn, row["id"], SessionState.ERROR,
-                       "The application stopped while this capture was active; the session was closed on restart.")
+                       f"The application stopped while this {what} was active; the session was closed on restart.")
     return len(rows)

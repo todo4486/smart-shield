@@ -57,6 +57,7 @@ class Event:
     basis: str  # "network time" or "alert creation time"
     interface: Optional[str]
     model_version: Optional[str]
+    replay: bool = False  # from a DATASET REPLAY session: only ever grouped with other replay alerts
 
 
 @dataclass
@@ -84,6 +85,7 @@ class Incident:
     alerts: List[alert_service.Alert] = field(default_factory=list)
     assigned_to: Optional[int] = None
     assigned_email: Optional[str] = None
+    is_replay: bool = False  # built from DATASET REPLAY alerts only
 
     @property
     def not_an_attack(self) -> bool:
@@ -108,8 +110,9 @@ def event_for(row) -> Event:
         horizons = [f.get("horizon_minutes", 0) for f in evidence.get("forecasts", [])]
         end = start + timedelta(minutes=max(horizons or [0]))
         basis = "network time"
+    replay = bool(row["is_replay"]) if "is_replay" in row.keys() else False
     return Event(row["id"], row["alert_type"], row["category"], row["severity"], start, end, basis,
-                 interface if interface not in (None, "(all)") else None, row["model_version"])
+                 interface if interface not in (None, "(all)") else None, row["model_version"], replay)
 
 
 def cluster(events: List[Event], window: timedelta) -> List[List[Event]]:
@@ -128,11 +131,12 @@ def cluster(events: List[Event], window: timedelta) -> List[List[Event]]:
 
 # ------------------------------------------------------------ measurements
 
-def measured_changes(conn, start: datetime, end: datetime) -> Dict[str, Any]:
+def measured_changes(conn, start: datetime, end: datetime, *, replay: bool = False) -> Dict[str, Any]:
     span = max(end - start, timedelta(minutes=5))
-    during = incident_repository.metrics_between(conn, to_iso(start), to_iso(start + span))
+    during = incident_repository.metrics_between(conn, to_iso(start), to_iso(start + span), replay=replay)
     # The baseline window ends just before `start`, so no sample is counted in both windows.
-    before = incident_repository.metrics_between(conn, to_iso(start - span), to_iso(start), end_inclusive=False)
+    before = incident_repository.metrics_between(conn, to_iso(start - span), to_iso(start), end_inclusive=False,
+                                                 replay=replay)
     result: Dict[str, Any] = {"window": [to_iso(start), to_iso(start + span)],
                               "baseline_window": [to_iso(start - span), to_iso(start)], "interfaces": {}}
     if not during:
@@ -249,23 +253,27 @@ def correlate(principal: Principal, window_minutes: int = DEFAULT_WINDOW_MINUTES
         if not events:
             return run
         open_incidents = [dict(r) for r in incident_repository.active_incidents(conn)]
-        for group in cluster(events, window):
+        # Replayed and real alerts are clustered separately and never join each other's incidents.
+        groups = [g for replay in (False, True) for g in cluster([e for e in events if e.replay == replay], window)]
+        for group in groups:
+            replay = group[0].replay
             start = min(e.start for e in group)
             end = max(e.end for e in group)
             target = next((i for i in open_incidents
-                           if parse_iso(i["window_start"]) - window <= end and start <= parse_iso(i["window_end"]) + window),
+                           if bool(i.get("is_replay")) == replay
+                           and parse_iso(i["window_start"]) - window <= end and start <= parse_iso(i["window_end"]) + window),
                           None)
             if target is not None:
                 existing = [event_for(r) for r in incident_repository.alerts_for(conn, target["id"])]
                 group = existing + group
                 start = min(start, parse_iso(target["window_start"]))
                 end = max(end, parse_iso(target["window_end"]))
-            changes = measured_changes(conn, start, end)
+            changes = measured_changes(conn, start, end, replay=replay)
             interfaces = sorted({e.interface for e in group if e.interface})
             recommendation = incident_repository.latest_recommendation_for(conn, interfaces[0] if interfaces else None)
             verdict = classify(group, changes, dict(recommendation) if recommendation else None)
             predictions = [dict(p) for p in incident_repository.predictions_between(
-                conn, to_iso(start - window), to_iso(end + window))]
+                conn, to_iso(start - window), to_iso(end + window), replay=replay)]
             model_outputs = {
                 "alert_models": sorted({e.model_version for e in group if e.model_version}),
                 "forecasts_in_window": predictions[-20:],
@@ -285,10 +293,10 @@ def correlate(principal: Principal, window_minutes: int = DEFAULT_WINDOW_MINUTES
                 run.incidents_updated.append(incident_id)
                 target.update(values)
             else:
-                incident_id = incident_repository.insert(conn, {**values, "status": "open",
+                incident_id = incident_repository.insert(conn, {**values, "status": "open", "is_replay": replay,
                                                                  "created_by": principal.user_id, "created_at": now})
                 run.incidents_created.append(incident_id)
-                open_incidents.append({"id": incident_id, **values})
+                open_incidents.append({"id": incident_id, "is_replay": replay, **values})
             for event in group:
                 incident_repository.link(conn, incident_id, event.alert_id)
             run.alerts_linked += sum(1 for e in group if e in events)
@@ -312,6 +320,7 @@ def _incident(row, alerts=None) -> Incident:
         alerts=alerts or [],
         assigned_to=row["assigned_to"] if "assigned_to" in row.keys() else None,
         assigned_email=row["assigned_email"] if "assigned_email" in row.keys() else None,
+        is_replay=bool(row["is_replay"]) if "is_replay" in row.keys() else False,
     )
 
 
@@ -337,7 +346,8 @@ def timeline(principal: Principal, incident: Incident) -> Dict[str, Any]:
     start, end = parse_iso(incident.window_start), parse_iso(incident.window_end)
     pad = max(end - start, timedelta(minutes=30))
     with database_service.session() as conn:
-        metrics = [dict(r) for r in incident_repository.metrics_between(conn, to_iso(start - pad), to_iso(end + pad))]
+        metrics = [dict(r) for r in incident_repository.metrics_between(conn, to_iso(start - pad), to_iso(end + pad),
+                                                                        replay=incident.is_replay)]
     events = []
     with database_service.session() as conn:
         for a in incident_repository.alerts_for(conn, incident.id):

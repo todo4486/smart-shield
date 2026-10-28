@@ -76,3 +76,16 @@ Full tests, lint, click-through as admin and analyst, load test with the 12k-flo
 6. **Source badge "COUNTERS".** Maps to live capture in counter-only mode; imported telemetry/datasets get `DATASET`; replay gets `DATASET REPLAY`. Existing provenance chips stay alongside.
 7. **Toast with Undo.** `st.toast` cannot hold buttons, so Undo lives in the Active policies panel the toast points to.
 8. **Network map needs IPs.** Live flows and the sample datasets have IPs; datasets without IP columns show "map unavailable for this source", never invented hosts.
+
+## Phase 3 notes (as built)
+
+- **Migration 008** rebuilds `monitoring_sessions` to allow `source_type = 'replay'` (SQLite cannot alter a CHECK in place).
+  The runner supports a `-- requires: foreign_keys_off` first line: foreign keys are off for that one migration, so
+  `DROP TABLE` cannot cascade to flows/metrics, and `PRAGMA foreign_key_check` must be clean before it commits.
+  It also adds `incidents.is_replay`.
+- **Replay keeps dataset timestamps** (decision 5). The header shows the replay clock and replayed rows/second.
+- **Correlation never mixes replay and real alerts**: they are clustered separately, and measured changes and
+  forecasts in an incident come from the same side only.
+- **Dev-only limitation**: editing a source file while the server runs makes Streamlit re-import the services, which
+  creates a new replay engine and closes a running replay (the old thread notices and stops). Restart the replay.
+  This does not happen in normal use.

@@ -145,7 +145,7 @@ CREATE TABLE incidents (
     created_by                 INTEGER REFERENCES users (id) ON DELETE SET NULL,
     created_at                 TEXT    NOT NULL,
     updated_at                 TEXT    NOT NULL
-, investigation_notes TEXT, assigned_to INTEGER REFERENCES users (id) ON DELETE SET NULL);
+, investigation_notes TEXT, assigned_to INTEGER REFERENCES users (id) ON DELETE SET NULL, is_replay INTEGER NOT NULL DEFAULT 0 CHECK (is_replay IN (0, 1)));
 
 CREATE TABLE login_attempts (
     id            INTEGER PRIMARY KEY,
@@ -170,17 +170,18 @@ CREATE TABLE model_registry (
     UNIQUE (model_family, version)
 );
 
-CREATE TABLE monitoring_sessions (
+CREATE TABLE "monitoring_sessions" (
     id                  INTEGER PRIMARY KEY,
     user_id             INTEGER REFERENCES users (id) ON DELETE SET NULL,
-    source_type         TEXT    NOT NULL CHECK (source_type IN ('dataset', 'historical_import', 'flow_import', 'live_capture')),
+    source_type         TEXT    NOT NULL CHECK (source_type IN ('dataset', 'historical_import', 'flow_import', 'live_capture', 'replay')),
     interface_name      TEXT,
     started_at          TEXT    NOT NULL,
     ended_at            TEXT    CHECK (ended_at IS NULL OR ended_at >= started_at),
     status              TEXT    NOT NULL CHECK (status IN ('STOPPED', 'STARTING', 'RUNNING', 'STOPPING', 'ERROR')),
     status_message      TEXT,
-    configuration_json  TEXT
-, dataset_id INTEGER REFERENCES datasets (id) ON DELETE SET NULL);
+    configuration_json  TEXT,
+    dataset_id          INTEGER REFERENCES datasets (id) ON DELETE SET NULL
+);
 
 CREATE TABLE network_flows (
     id                    INTEGER PRIMARY KEY,
@@ -304,6 +305,8 @@ CREATE INDEX idx_login_attempts_key_time ON login_attempts (email_key, attempted
 CREATE INDEX idx_model_registry_trained ON model_registry (trained_at);
 
 CREATE INDEX idx_monitoring_sessions_dataset ON monitoring_sessions (dataset_id);
+
+CREATE INDEX idx_monitoring_sessions_source ON monitoring_sessions (source_type);
 
 CREATE INDEX idx_monitoring_sessions_started ON monitoring_sessions (started_at);
 

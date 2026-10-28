@@ -13,6 +13,7 @@ SOURCE_LABELS = {
     "dataset": "Dataset flows",
     "flow_import": "Flow records",
     "live_capture": "Live capture",
+    "replay": "DATASET REPLAY",
 }
 
 PROVENANCE_LABELS = {
