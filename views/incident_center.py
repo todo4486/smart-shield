@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from components import severity
 from components.guard import require_principal
 from components.theme import COLORS, SERIES_COLORS, apply_chart_theme
 from components.ui import format_bits_rate, format_ratio, format_timestamp, kpi_tile, page_header, section_label
@@ -154,7 +155,7 @@ with incidents_tab:
             st.markdown("\n".join(f"{n}. {step}" for n, step in enumerate(incident.steps, start=1)))
             section_label("Related alerts")
             st.dataframe(pd.DataFrame([{
-                "ID": a.id, "Type": a.alert_type, "Severity": a.severity, "Category": a.category,
+                "ID": a.id, "Type": a.alert_type, "Severity": severity.plain(a.severity), "Category": a.category,
                 "Status": a.status, "Model": a.model_version or "—"} for a in incident.alerts]), hide_index=True)
             if principal.has(Permission.TRIAGE_ALERTS):
                 options = sorted(correlation.TRANSITIONS[incident.status])
@@ -186,14 +187,15 @@ with alerts_tab:
     f1, f2, f3 = st.columns(3)
     statuses = f1.multiselect("Status ", list(alert_service.STATUSES), default=["open", "acknowledged"])
     types = f2.multiselect("Type", list(alert_service.TYPES), default=list(alert_service.TYPES))
-    severities = f3.multiselect("Severity", list(alert_service.SEVERITIES), default=list(alert_service.SEVERITIES))
+    severities = f3.multiselect("Severity", list(alert_service.SEVERITIES), default=list(alert_service.SEVERITIES),
+                                 format_func=severity.plain)
     alerts = alert_service.list_alerts(principal, statuses=statuses or None, types=types or None,
                                        severities=severities or None)
     if not alerts:
         st.info("No alerts match these filters.")
     else:
         st.dataframe(pd.DataFrame([{
-            "ID": a.id, "Type": a.alert_type, "Severity": a.severity, "Category": a.category, "Status": a.status,
+            "ID": a.id, "Type": a.alert_type, "Severity": severity.plain(a.severity), "Category": a.category, "Status": a.status,
             "Source": "Smart Shield" if a.alert_type in ("security", "anomaly") else "PredictNet",
             "Model": a.model_version or "—", "Raised": format_timestamp(a.created_at), "Reason": a.reason}
             for a in alerts]), hide_index=True)

@@ -85,3 +85,32 @@ def top_open_alerts(conn: sqlite3.Connection, limit: int = 6) -> List[sqlite3.Ro
         "WHEN 'medium' THEN 2 ELSE 3 END, created_at DESC, id DESC LIMIT ?",
         (limit,),
     ).fetchall()
+
+
+def active_incident_summaries(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    """Open/investigating incidents with the most severe linked alert (NULL when no alert is linked)."""
+    return conn.execute(
+        "SELECT i.id, i.title, i.classification, i.status, i.created_at, "
+        "(SELECT a.severity FROM incident_alerts ia JOIN alerts a ON a.id = ia.alert_id WHERE ia.incident_id = i.id "
+        " ORDER BY CASE a.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END "
+        " LIMIT 1) AS top_severity "
+        "FROM incidents i WHERE i.status IN ('open', 'investigating') ORDER BY i.id"
+    ).fetchall()
+
+
+def latest_utilization_by_interface(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    """The newest stored utilization per interface (rows without a utilization value are skipped)."""
+    return conn.execute(
+        "SELECT m.interface_name, m.utilization_ratio, m.timestamp, m.utilization_provenance "
+        "FROM network_metrics m JOIN (SELECT interface_name, MAX(timestamp) AS ts FROM network_metrics "
+        "WHERE utilization_ratio IS NOT NULL GROUP BY interface_name) latest "
+        "ON m.interface_name IS latest.interface_name AND m.timestamp = latest.ts "
+        "WHERE m.utilization_ratio IS NOT NULL"
+    ).fetchall()
+
+
+def flows_since(conn: sqlite3.Connection, session_id: int, since: str) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM network_flows WHERE session_id = ? AND timestamp >= ?", (session_id, since)
+    ).fetchone()[0]
+

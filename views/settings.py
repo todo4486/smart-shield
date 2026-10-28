@@ -4,8 +4,8 @@ from __future__ import annotations
 import streamlit as st
 
 from components.guard import require_principal
-from components.ui import page_header, planned_notice, provenance_chip
-from services import interface_counters, settings_service
+from components.ui import page_header, planned_notice, provenance_chip, section_label
+from services import interface_counters, preferences_service, settings_service
 from services.authorization import Permission, PermissionDenied
 from services.settings_service import PredictNetSettings, SettingsError
 
@@ -14,6 +14,20 @@ can_edit = principal.has(Permission.MANAGE_SETTINGS)
 
 page_header("Settings", "Configuration used by PredictNet. These are starting points for your network, not universal "
             "standards. Every change is validated and recorded in the audit log.", eyebrow="Workspace")
+
+section_label("Your display")
+with st.container(border=True):
+    left, right = st.columns([3, 2])
+    with left:
+        reduce = st.toggle(
+            "Reduce motion", value=preferences_service.get_preferences(principal).reduce_motion,
+            help="Turns off transitions, pulsing markers and moving particles on the network map. Saved for your account.")
+        if reduce != st.session_state.get("reduce_motion", False):
+            preferences_service.set_reduce_motion(principal, reduce)
+            st.rerun()
+    with right:
+        st.caption("**Light or dark theme:** open the app menu (⋮, top right) → **Settings** → **Choose app theme**. "
+                   "Your browser remembers the choice.")
 
 current = settings_service.get_predictnet_settings()
 source = settings_service.settings_source()

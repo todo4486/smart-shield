@@ -229,6 +229,12 @@ CREATE TABLE policy_actions (
 
 CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
 
+CREATE TABLE user_preferences (
+    user_id        INTEGER PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+    reduce_motion  INTEGER NOT NULL DEFAULT 0 CHECK (reduce_motion IN (0, 1)),
+    updated_at     TEXT    NOT NULL
+);
+
 CREATE TABLE users (
     id              INTEGER PRIMARY KEY,
     name            TEXT    NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 100),
@@ -300,6 +306,9 @@ CREATE INDEX idx_network_metrics_session_time ON network_metrics (session_id, ti
 CREATE INDEX idx_network_metrics_source_iface_time ON network_metrics (source_name, interface_name, timestamp);
 
 CREATE INDEX idx_network_metrics_time ON network_metrics (timestamp);
+
+CREATE INDEX idx_network_metrics_util_iface_time ON network_metrics (interface_name, timestamp)
+    WHERE utilization_ratio IS NOT NULL;
 
 CREATE INDEX idx_policy_actions_executed ON policy_actions (executed_at);
 

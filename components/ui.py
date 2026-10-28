@@ -32,6 +32,17 @@ def page_header(title: str, subtitle: str, eyebrow: str = "Smart Shield") -> Non
     )
 
 
+_SOURCE_CLASSES = {"live": "ss-src-live", "counters": "ss-src-counters", "dataset": "ss-src-dataset",
+                   "replay": "ss-src-replay", "none": "ss-src-none"}
+
+
+def source_badge(source) -> str:
+    """LIVE / COUNTERS / DATASET / DATASET REPLAY badge for a services.data_source.DataSource."""
+    dot = "<span class='ss-pulse-dot'></span>" if source.kind == "live" else ""
+    return (f"<span class='ss-src {_SOURCE_CLASSES[source.kind]}' title='{escape(source.description)}'>"
+            f"{dot}{escape(source.label)}</span>")
+
+
 def provenance_chip(provenance: str) -> str:
     key = provenance if provenance in PROVENANCE_LABELS else "unavailable"
     return f"<span class='ss-chip ss-chip-{key}'>{escape(PROVENANCE_LABELS[key])}</span>"

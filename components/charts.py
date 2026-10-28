@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from components.theme import COLORS, SERIES_COLORS, apply_chart_theme
+from components.theme import COLORS, SERIES_COLORS, apply_chart_theme, palette
 
 
 def time_series(
@@ -81,7 +81,7 @@ def confusion_heatmap(matrix: List[List[int]], labels: List[str], *, title: str,
     shares = np.divide(values, row_totals, out=np.zeros_like(values), where=row_totals > 0)
     fig = go.Figure(go.Heatmap(
         z=shares, x=labels, y=labels, text=values.astype(int), texttemplate="%{text:,}",
-        colorscale=[[0, COLORS["card"]], [1, COLORS["accent"]]], zmin=0, zmax=1, showscale=False,
+        colorscale=[[0, palette()["card"]], [1, COLORS["accent"]]], zmin=0, zmax=1, showscale=False,
         hovertemplate="Actual %{y}<br>Predicted %{x}<br>%{text:,} rows (%{z:.1%} of actual)<extra></extra>",
     ))
     fig.update_layout(title=title, xaxis_title="Predicted", yaxis_title="Actual")

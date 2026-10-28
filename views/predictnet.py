@@ -9,7 +9,7 @@ import streamlit as st
 
 from components import charts
 from components.guard import require_principal
-from components.theme import COLORS, apply_chart_theme
+from components.theme import COLORS, apply_chart_theme, palette
 from components.ui import (
     empty_state, format_bits_rate, format_bytes_rate, format_ratio, format_timestamp, kpi_tile, page_header, recall,
     remember, section_label,
@@ -159,12 +159,12 @@ with backtest_tab:
     if not bt.empty:
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=bt["target_time"], y=bt["actual"], name="Actual (measured)", mode="lines",
-                                 line=dict(color=COLORS["text"], width=1.5), connectgaps=False))
-        palette = {"train": COLORS["muted"], "validation": COLORS["warn"], "test": COLORS["accent"],
+                                 line=dict(color=palette()["text"], width=1.5), connectgaps=False))
+        period_colors = {"train": COLORS["muted"], "validation": COLORS["warn"], "test": COLORS["accent"],
                    "not used in training": COLORS["accent"], "beyond available data": COLORS["ok"]}
         for period, part in bt.groupby("period", sort=False):
             fig.add_trace(go.Scatter(x=part["target_time"], y=part["predicted"], mode="lines",
-                                     name=f"Predicted ({period})", line=dict(color=palette[period], width=2, dash="dot")))
+                                     name=f"Predicted ({period})", line=dict(color=period_colors[period], width=2, dash="dot")))
         fig.update_layout(title=f"{TARGETS[target]}: forecast {horizon // 60} min ahead vs actual · UTC",
                           hovermode="x unified",
                           legend=dict(orientation="h", x=0, xanchor="left", y=-0.12, yanchor="top"),

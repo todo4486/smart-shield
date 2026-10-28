@@ -4,8 +4,10 @@ from __future__ import annotations
 import streamlit as st
 
 from components import charts
-from components.ui import format_bits_rate, format_bytes_rate, format_ratio, format_timestamp, kpi_tile, section_label
-from services import interface_counters, live_monitor_service, settings_service, telemetry_view_service
+from components.ui import (
+    format_bits_rate, format_bytes_rate, format_ratio, format_timestamp, kpi_tile, section_label, source_badge,
+)
+from services import data_source, interface_counters, live_monitor_service, settings_service, telemetry_view_service
 from services.authorization import Permission, PermissionDenied, Principal
 from services.live_monitor_service import MODES, MonitorError
 
@@ -31,6 +33,9 @@ def render(principal: Principal) -> None:
     @st.fragment(run_every=3 if live.status.running else None)
     def status_panel() -> None:
         status = live.status
+        source = data_source.classify("live_capture" if status.session_id else None, live_running=status.running,
+                                      live_mode=status.mode)
+        st.markdown(source_badge(source), unsafe_allow_html=True)
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             kpi_tile("Capture state", status.state.title() if status.session_id else "Not started", "measured" if

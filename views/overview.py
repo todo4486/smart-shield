@@ -5,15 +5,16 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from components import severity
 from components.guard import require_principal
 from components.theme import COLORS, apply_chart_theme
 from components.ui import (
     SOURCE_LABELS, empty_state, format_bits_rate, format_bytes_rate, format_ratio, format_timestamp,
-    kpi_tile, page_header, section_label, step_cards,
+    kpi_tile, page_header, section_label, source_badge, step_cards,
 )
 from html import escape
 
-from services import dashboard_service, health_summary_service
+from services import dashboard_service, data_source, health_summary_service, live_monitor_service
 from services.authorization import Permission
 
 principal = require_principal()
@@ -73,7 +74,10 @@ if data.has_any_data:
     st.write("")
 
 # ---------------------------------------------------------------- traffic
-section_label("Traffic")
+live_status = live_monitor_service.get_monitor().status
+traffic_source = data_source.classify(data.monitoring.source_type, live_running=live_status.running,
+                                      live_mode=live_status.mode)
+st.markdown(f"<div class='ss-section-label'>Traffic &nbsp;{source_badge(traffic_source)}</div>", unsafe_allow_html=True)
 c1, c2, c3, c4 = st.columns(4)
 with c1:
     status = data.monitoring
@@ -145,7 +149,7 @@ if data.top_alerts:
     st.write("")
     section_label("Most severe unresolved alerts (Smart Shield and PredictNet)")
     st.dataframe(pd.DataFrame([{
-        "ID": a["id"], "Severity": a["severity"], "Type": a["alert_type"], "Category": a["category"],
+        "ID": a["id"], "Severity": severity.plain(a["severity"]), "Type": a["alert_type"], "Category": a["category"],
         "Status": a["status"], "Model": a["model_version"] or "—", "Raised": format_timestamp(a["created_at"])}
         for a in data.top_alerts]), hide_index=True)
     st.page_link("views/incident_center.py", label="Investigate in the Incident Center", icon=":material/crisis_alert:")

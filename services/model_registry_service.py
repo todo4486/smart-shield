@@ -168,6 +168,30 @@ def _verified_path(record: ModelRecord) -> Path:
     return path
 
 
+_VERIFIED: Dict[tuple, bool] = {}
+
+
+def is_verified(record: ModelRecord) -> bool:
+    """True when the artifact exists inside the artifact directory and matches its registered SHA-256.
+
+    The hash is recomputed only when the file's size or modification time changes, so this is cheap
+    enough for the header strip on every page.
+    """
+    try:
+        path = Path(record.artifact_path).resolve()
+        stat = path.stat()
+    except OSError:
+        return False
+    key = (str(path), stat.st_mtime_ns, stat.st_size, record.artifact_sha256)
+    if key not in _VERIFIED:
+        try:
+            _verified_path(record)
+            _VERIFIED[key] = True
+        except ArtifactIntegrityError:
+            _VERIFIED[key] = False
+    return _VERIFIED[key]
+
+
 def load_bundle(record: ModelRecord) -> Dict[str, Any]:
     """Load a registered, hash-verified artifact. Never call joblib.load on anything else."""
     bundle = joblib.load(_verified_path(record))

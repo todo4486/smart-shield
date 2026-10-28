@@ -8,6 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from components import severity
 from components.guard import require_principal
 from components.theme import COLORS, apply_chart_theme
 from components.ui import format_timestamp, kpi_tile, page_header, section_label
@@ -115,7 +116,8 @@ with detect_tab:
 with alerts_tab:
     f1, f2, f3 = st.columns(3)
     statuses = f1.multiselect("Status", list(alert_service.STATUSES), default=["open", "acknowledged"])
-    severities = f2.multiselect("Severity", list(alert_service.SEVERITIES), default=list(alert_service.SEVERITIES))
+    severities = f2.multiselect("Severity", list(alert_service.SEVERITIES), default=list(alert_service.SEVERITIES),
+                                 format_func=severity.plain)
     types = f3.multiselect("Type", SECURITY_TYPES, default=SECURITY_TYPES)
     alerts = alert_service.list_alerts(principal, statuses=statuses or None, severities=severities or None,
                                        types=types or None)
@@ -133,18 +135,18 @@ with alerts_tab:
         st.info("No alerts match these filters.")
     else:
         st.dataframe(pd.DataFrame([
-            {"ID": a.id, "Severity": a.severity, "Type": a.alert_type, "Category": a.category, "Status": a.status,
+            {"ID": a.id, "Severity": severity.plain(a.severity), "Type": a.alert_type, "Category": a.category, "Status": a.status,
              "Flows": a.evidence.get("flows"), "Model": a.model_version or "—", "Raised": format_timestamp(a.created_at)}
             for a in alerts
         ]), hide_index=True)
         by_id = {a.id: a for a in alerts}
         alert_id = st.selectbox("Investigate alert", list(by_id),
-                                format_func=lambda i: f"#{i} · {by_id[i].severity.upper()} · {by_id[i].category}")
+                                format_func=lambda i: f"#{i} · {severity.plain(by_id[i].severity)} · {by_id[i].category}")
         alert, events = alert_service.get_alert(principal, alert_id)
         color = SEVERITY_COLORS.get(alert.severity, COLORS["muted"])
         st.markdown(
             f"<div class='ss-card' style='border-left:4px solid {color}'><h4>#{alert.id} · {escape(alert.category)}"
-            f" · {escape(alert.severity.upper())}</h4><p>{escape(alert.reason)}</p></div>",
+            f" {severity.badge(alert.severity)}</h4><p>{escape(alert.reason)}</p></div>",
             unsafe_allow_html=True,
         )
         left, right = st.columns([3, 2])

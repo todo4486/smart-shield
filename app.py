@@ -11,9 +11,10 @@ import logging
 import streamlit as st
 
 from components.sidebar import render_logo, render_sidebar
+from components.header import render_header
 from components.theme import inject_css, register_plotly_template
 from config import get_settings
-from services import database_service, monitoring_service, session_service
+from services import database_service, monitoring_service, preferences_service, session_service
 from services.authorization import Permission
 
 st.set_page_config(
@@ -37,9 +38,12 @@ settings = get_settings()
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 _prepare_database(str(settings.db_path))
 register_plotly_template()
-inject_css()
 
 principal = session_service.resolve(st.session_state)
+preferences = preferences_service.get_preferences(principal) if principal else None
+# Pages and animated components read this flag; it mirrors the signed-in user's saved preference.
+st.session_state["reduce_motion"] = bool(preferences and preferences.reduce_motion)
+inject_css(reduce_motion=st.session_state["reduce_motion"])
 
 if principal is None:
     navigation = st.navigation(
@@ -72,5 +76,6 @@ else:
         )
     navigation = st.navigation(sections, position="sidebar", expanded=True)
     render_sidebar(principal)
+    render_header(principal)
 
 navigation.run()

@@ -1,13 +1,35 @@
+# Fonts are bundled in static/fonts (SIL Open Font License) and served locally: nothing loads from a CDN.
+[[theme.fontFaces]]
+family = "Space Grotesk"
+url = "app/static/fonts/SpaceGrotesk.ttf"
+weight = "300 700"
+
+[[theme.fontFaces]]
+family = "JetBrains Mono"
+url = "app/static/fonts/JetBrainsMono.ttf"
+weight = "100 800"
+
 [theme]
-base = "dark"
+font = "Space Grotesk, system-ui, sans-serif"
+codeFont = "JetBrains Mono, ui-monospace, monospace"
 primaryColor = "#3B82F6"
+
+# Dark SOC theme (default) and a light theme. Viewers switch between them in the app menu (⋮ → Settings).
+[theme.dark]
 backgroundColor = "#0B1220"
 secondaryBackgroundColor = "#111A2E"
 textColor = "#E6EBF5"
-font = "sans serif"
+borderColor = "#1E2A44"
+
+[theme.light]
+backgroundColor = "#F5F7FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#0F172A"
+borderColor = "#D6DEEB"
 
 [client]
-toolbarMode = "minimal"
+# "viewer" keeps the menu small but still offers Settings → theme (light / dark).
+toolbarMode = "viewer"
 # "none": users see a generic message; details go only to the server log (no paths or tracebacks).
 showErrorDetails = "none"
 
@@ -16,6 +38,7 @@ runOnSave = false
 maxUploadSize = 512
 enableXsrfProtection = true
 enableCORS = true
+enableStaticServing = true
 
 [browser]
 gatherUsageStats = false
