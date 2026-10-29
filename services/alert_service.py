@@ -14,7 +14,7 @@ from datetime import timedelta
 from typing import Any, Dict, List, Mapping, Optional
 
 from repositories import alert_repository
-from services import audit_service, database_service
+from services import audit_service, database_service, suppression_service
 from services.authorization import Permission, Principal, require_permission
 from services.timeutil import to_iso, utc_now, utc_now_iso
 
@@ -50,6 +50,7 @@ class Alert:
     acknowledged_at: Optional[str]
     resolved_at: Optional[str]
     investigation_notes: Optional[str]
+    suppressed_by_rule: Optional[int] = None  # stored and visible under "Suppressed", left out of the queues
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Alert":
@@ -60,6 +61,7 @@ class Alert:
             model_id=row["model_id"], model_version=row["model_version"], created_at=row["created_at"],
             acknowledged_at=row["acknowledged_at"], resolved_at=row["resolved_at"],
             investigation_notes=row["investigation_notes"],
+            suppressed_by_rule=row["suppressed_by_rule"] if "suppressed_by_rule" in row.keys() else None,
         )
 
 
@@ -99,14 +101,24 @@ def create_alert(
     })
     alert_repository.insert_event(conn, alert_id=alert_id, event_type="created", from_status=None,
                                   to_status="open", note=None, user_id=created_by, now=now)
+    rule = suppression_service.find_rule(conn, alert_type, category, evidence)
+    if rule is not None:
+        alert_repository.set_suppressed(conn, alert_id, rule.id)
+        alert_repository.insert_event(conn, alert_id=alert_id, event_type="note", from_status=None, to_status=None,
+                                      note=f"Suppressed by rule #{rule.id} ({rule.describe()}): {rule.reason}",
+                                      user_id=None, now=now)
     return alert_id
 
 
-def list_alerts(principal: Principal, *, statuses=None, severities=None, types=None, limit: int = 500) -> List[Alert]:
+def list_alerts(principal: Principal, *, statuses=None, severities=None, types=None, limit: int = 500,
+                suppressed: str = "exclude") -> List[Alert]:
+    """`suppressed`: "exclude" (default queues), "only" (the Suppressed filter) or "include"."""
     require_permission(principal, Permission.VIEW_ALERTS, action="alert.list")
+    if suppressed not in ("exclude", "only", "include"):
+        raise AlertError("Unknown suppression filter.")
     with database_service.session() as conn:
         rows = alert_repository.list_alerts(conn, statuses=statuses, severities=severities, types=types,
-                                            limit=max(1, min(int(limit), 5000)))
+                                            limit=max(1, min(int(limit), 5000)), suppressed=suppressed)
     return [Alert.from_row(r) for r in rows]
 
 

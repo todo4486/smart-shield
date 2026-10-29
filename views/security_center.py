@@ -14,8 +14,9 @@ from components.theme import COLORS, apply_chart_theme
 from components.ui import format_timestamp, kpi_tile, page_header, section_label
 from services import (
     alert_service, dataset_service, explainability_service, intrusion_inference_service, mitre as mitre_service,
-    model_registry_service,
+    model_registry_service, suppression_service,
 )
+from services.suppression_service import SuppressionError
 from services.alert_service import AlertError
 from services.authorization import Permission, PermissionDenied
 from services.intrusion_inference_service import DetectionError, DetectionOptions
@@ -55,7 +56,8 @@ with c4:
     kpi_tile("Classifier false-positive rate", f"{test['false_positive_rate']:.2%}" if test else None,
              "derived" if test else "unavailable", "Measured on the held-out test set" if test else "No active model")
 
-detect_tab, alerts_tab, rules_tab = st.tabs(["Run detection", "Alerts", "How alerts are raised"])
+detect_tab, alerts_tab, noise_tab, rules_tab = st.tabs(["Run detection", "Alerts", "Noise control",
+                                                        "How alerts are raised"])
 
 # ------------------------------------------------------------------ detection
 with detect_tab:
@@ -117,6 +119,48 @@ with detect_tab:
 
 # --------------------------------------------------------------------- alerts
 INVESTIGATED_KEY = "security_investigated_alert"
+TYPE_LABELS = {None: "Any type", "security": "Security", "anomaly": "Anomaly", "congestion": "Congestion",
+               "performance": "Performance"}
+
+
+def _rule_form(key: str, *, alert_type=None, category="", host="", host_role="source") -> None:
+    """Create (admin) or request (analyst) a suppression rule. The service decides what the role may do."""
+    is_admin = principal.has(Permission.MANAGE_SETTINGS)
+    with st.form(key, border=False, clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        types = [None, "security", "anomaly", "congestion", "performance"]
+        rule_type = c1.selectbox("Alert type", types, index=types.index(alert_type), format_func=TYPE_LABELS.get)
+        rule_category = c2.text_input("Category (exact, optional)", value=category or "", max_chars=120)
+        c3, c4 = st.columns(2)
+        rule_host = c3.text_input("Host IP (optional)", value=host or "", max_chars=64,
+                                  help="Only alerts whose flows ALL come from (or go to) this host are suppressed.")
+        role = c4.radio("Host is the", ["source", "destination"], index=["source", "destination"].index(host_role),
+                        horizontal=True)
+        days = st.slider("Expires after (days)", 1, suppression_service.MAX_DAYS, 7)
+        reason = st.text_input("Reason (shown to everyone, audited)", max_chars=500,
+                               placeholder="e.g. nightly backups from the backup server")
+        label = "Create rule" if is_admin else "Request rule (an administrator approves it)"
+        if st.form_submit_button(label, type="primary"):
+            action = suppression_service.create_rule if is_admin else suppression_service.request_rule
+            try:
+                rule_id = action(principal, alert_type=rule_type, category=rule_category, host=rule_host,
+                                 host_role=role, reason=reason, days=days)
+            except (SuppressionError, PermissionDenied) as exc:
+                st.error(str(exc))
+            else:
+                st.toast(f"Suppression rule #{rule_id} {'created' if is_admin else 'requested'}.")
+                st.rerun()
+
+
+def _suppress_popover(alert) -> None:
+    if not principal.has(Permission.TRIAGE_ALERTS):
+        return
+    tops = alert.evidence.get("top_sources") or []
+    only_source = tops[0]["value"] if len(tops) == 1 else ""
+    with st.popover("Suppress similar alerts…", icon=":material/notifications_off:"):
+        st.caption("Future alerts that match are stored but kept out of the queues until the rule expires. "
+                   "This alert itself is not changed.")
+        _rule_form(f"suppress_{alert.id}", alert_type=alert.alert_type, category=alert.category, host=only_source)
 
 
 def _technique(alert) -> str:
@@ -125,13 +169,17 @@ def _technique(alert) -> str:
 
 
 with alerts_tab:
-    f1, f2, f3 = st.columns(3)
+    f1, f2, f3, f4 = st.columns([3, 3, 2, 2])
     statuses = f1.multiselect("Status", list(alert_service.STATUSES), default=["open", "acknowledged"])
     severities = f2.multiselect("Severity", list(alert_service.SEVERITIES), default=list(alert_service.SEVERITIES),
                                  format_func=severity.plain)
     types = f3.multiselect("Type", SECURITY_TYPES, default=SECURITY_TYPES)
+    shown = f4.selectbox("Show", ["exclude", "only", "include"],
+                         format_func={"exclude": "Active alerts", "only": "Suppressed", "include": "Both"}.get,
+                         help="Suppressed alerts are stored and visible here; suppression rules only keep them "
+                              "out of the queues and counts.")
     alerts = alert_service.list_alerts(principal, statuses=statuses or None, severities=severities or None,
-                                       types=types or None)
+                                       types=types or None, suppressed=shown)
     daily = [d for d in alert_service.daily_counts(principal) if d["alert_type"] in SECURITY_TYPES]
     if daily:
         frame = pd.DataFrame(daily)
@@ -147,7 +195,7 @@ with alerts_tab:
     else:
         st.dataframe(pd.DataFrame([
             {"ID": a.id, "Severity": severity.plain(a.severity), "Type": a.alert_type, "Category": a.category,
-             "ATT&CK": _technique(a), "Status": a.status,
+             "ATT&CK": _technique(a), "Status": a.status + (" · suppressed" if a.suppressed_by_rule else ""),
              "Flows": a.evidence.get("flows"), "Model": a.model_version or "—", "Raised": format_timestamp(a.created_at)}
             for a in alerts
         ]), hide_index=True)
@@ -167,6 +215,20 @@ with alerts_tab:
             + (f"<div style='margin-top:.5rem'>{techniques}</div>" if techniques else "") + "</div>",
             unsafe_allow_html=True,
         )
+        if alert.suppressed_by_rule:
+            s1, s2 = st.columns([4, 1])
+            s1.warning(f"Suppressed by rule #{alert.suppressed_by_rule} (see Noise control). It is kept out of the "
+                       "queues and counts, but nothing was deleted.", icon=":material/notifications_off:")
+            if s2.button("Unsuppress", key=f"unsuppress_{alert.id}", disabled=not principal.has(Permission.TRIAGE_ALERTS),
+                         width="stretch"):
+                try:
+                    suppression_service.unsuppress_alert(principal, alert.id)
+                except (SuppressionError, PermissionDenied) as exc:
+                    st.error(str(exc))
+                else:
+                    st.rerun()
+        else:
+            _suppress_popover(alert)
         if st.toggle("Why was this flagged?", key=f"explain_{alert.id}",
                      help="Feature importances, deviations from benign traffic, the anomaly score and a plain summary."):
             try:
@@ -229,6 +291,58 @@ with alerts_tab:
             ]), hide_index=True)
             if alert.investigation_notes:
                 st.text(alert.investigation_notes)
+
+# ---------------------------------------------------------------- noise control
+with noise_tab:
+    is_admin = principal.has(Permission.MANAGE_SETTINGS)
+    st.markdown("Suppression rules keep **new** matching alerts out of the queues, counts, correlation and the "
+                "network map. Suppressed alerts are still stored and listed under *Show → Suppressed* in Alerts. "
+                "Every rule has an author, a reason and an expiry, and every change is audited. "
+                + ("" if is_admin else "Analysts can request a rule; an administrator approves it."))
+    rules = suppression_service.list_rules(principal)
+    pending = [r for r in rules if suppression_service.effective_status(r) == "requested"]
+    if is_admin and pending:
+        section_label(f"Requests waiting for approval ({len(pending)})")
+        for r in pending:
+            with st.container(border=True):
+                st.markdown(f"**#{r.id}** · {r.describe()} · until {format_timestamp(r.expires_at)} · requested by "
+                            f"{r.requested_by_email or '—'}  \n*{r.reason}*")
+                note = st.text_input("Note (optional)", key=f"review_note_{r.id}", max_chars=500)
+                a, b, _ = st.columns([1, 1, 4])
+                for column, approve, text in ((a, True, "Approve"), (b, False, "Reject")):
+                    if column.button(text, key=f"review_{r.id}_{approve}", type="primary" if approve else "secondary"):
+                        try:
+                            suppression_service.review_request(principal, r.id, approve=approve, note=note)
+                        except (SuppressionError, PermissionDenied) as exc:
+                            st.error(str(exc))
+                        else:
+                            st.rerun()
+    section_label("Rules")
+    if rules:
+        st.dataframe(pd.DataFrame([{
+            "ID": r.id, "Status": suppression_service.effective_status(r), "Suppresses": r.describe(),
+            "Reason": r.reason, "Expires": format_timestamp(r.expires_at), "Alerts hidden": r.alerts_suppressed,
+            "Requested by": r.requested_by_email or "—", "Reviewed by": r.reviewed_by_email or "—",
+            "Review note": r.review_note or ""} for r in rules]), hide_index=True)
+        active = [r for r in rules if suppression_service.effective_status(r) == "active"]
+        if active:
+            c1, c2 = st.columns([3, 1])
+            target = c1.selectbox("Revoke an active rule", [r.id for r in active],
+                                  format_func=lambda i: f"#{i} · " + next(r.describe() for r in active if r.id == i),
+                                  disabled=not is_admin)
+            c2.write("")
+            if c2.button("Revoke", disabled=not is_admin, help=None if is_admin else "Admin only", width="stretch"):
+                try:
+                    suppression_service.revoke(principal, target)
+                except (SuppressionError, PermissionDenied) as exc:
+                    st.error(str(exc))
+                else:
+                    st.rerun()
+    else:
+        st.caption("No suppression rules yet.")
+    if principal.has(Permission.TRIAGE_ALERTS):
+        section_label("New rule" if is_admin else "Request a rule")
+        _rule_form("new_rule")
 
 # ---------------------------------------------------------------------- rules
 with rules_tab:

@@ -279,3 +279,43 @@ def action_history(principal: Principal, limit: int = 100) -> List[dict]:
     require_permission(principal, Permission.VIEW_DASHBOARD, action="shaping.history")
     with database_service.session() as conn:
         return [dict(r) for r in bandwidth_repository.list_actions(conn, limit)]
+
+
+def plan_preview(principal: Principal, recommendation_id: int, interface: str) -> dict:
+    """What applying would change, for the confirmation dialog: the split before and after, and the exact argv lists.
+
+    "Before" is the policy Smart Shield last applied on this interface (not a reading of the kernel's state; the
+    dialog also shows `tc` output for that). Nothing runs here.
+    """
+    require_permission(principal, Permission.APPLY_TRAFFIC_POLICY, action="shaping.preview",
+                       details={"recommendation_id": recommendation_id, "interface": interface})
+    _check_interface(interface)
+    after, commands = _plan(recommendation_id, interface)
+    with database_service.session() as conn:
+        previous = bandwidth_repository.last_successful_apply(conn, interface)
+    before = json.loads(previous["policy_after_json"]) if previous else None
+    return {"before": before, "after": after, "commands": commands}
+
+
+def active_policies(principal: Principal) -> List[dict]:
+    """The policy Smart Shield currently has applied on each interface (latest successful apply not rolled back)."""
+    require_permission(principal, Permission.VIEW_DASHBOARD, action="shaping.active")
+    with database_service.session() as conn:
+        interfaces = [r[0] for r in conn.execute("SELECT DISTINCT target_interface FROM policy_actions "
+                                                 "ORDER BY target_interface")]
+        out = []
+        for interface in interfaces:
+            row = bandwidth_repository.last_successful_apply(conn, interface)
+            if row is None:
+                continue
+            removed = conn.execute(
+                "SELECT 1 FROM policy_actions WHERE target_interface = ? AND action_type = 'emergency_disable' "
+                "AND status = 'succeeded' AND (executed_at > ? OR (executed_at = ? AND id > ?)) LIMIT 1",
+                (interface, row["executed_at"], row["executed_at"], row["id"])).fetchone()
+            if removed:
+                continue  # emergency disable removed everything after this apply
+            who = conn.execute("SELECT email FROM users WHERE id = ?", (row["executed_by"],)).fetchone()
+            out.append({"interface": interface, "action_id": row["id"], "recommendation_id": row["recommendation_id"],
+                        "applied_at": row["executed_at"], "applied_by": who["email"] if who else None,
+                        "policy": json.loads(row["policy_after_json"]) if row["policy_after_json"] else {}})
+    return out

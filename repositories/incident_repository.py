@@ -16,6 +16,7 @@ def unlinked_alerts(conn: sqlite3.Connection, statuses: tuple = ("open", "acknow
     placeholders = ", ".join("?" for _ in statuses)
     return conn.execute(
         f"SELECT a.*, {IS_REPLAY_ALERT} AS is_replay FROM alerts a WHERE a.status IN ({placeholders}) "
+        "AND a.suppressed_by_rule IS NULL "
         "AND NOT EXISTS (SELECT 1 FROM incident_alerts ia WHERE ia.alert_id = a.id) ORDER BY a.created_at, a.id",
         statuses,
     ).fetchall()
@@ -132,7 +133,9 @@ def alert_incident_map(conn: sqlite3.Connection) -> Dict[int, int]:
 
 
 def latest_alerts(conn: sqlite3.Connection, limit: int = 2000) -> List[sqlite3.Row]:
-    return conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    # Suppressed alerts stay out of the timeline, like every other queue (they are under the "Suppressed" filter).
+    return conn.execute("SELECT * FROM alerts WHERE suppressed_by_rule IS NULL ORDER BY id DESC LIMIT ?",
+                        (limit,)).fetchall()
 
 
 def incidents_overlapping(conn: sqlite3.Connection, start: str, end: str) -> List[sqlite3.Row]:

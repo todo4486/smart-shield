@@ -64,7 +64,7 @@ def test_migration_008_rebuild_keeps_sessions_and_child_rows(tmp_path):
     conn.execute("INSERT INTO network_metrics (session_id, timestamp, source_name, measurement_method, provenance, "
                  "validity_status) VALUES (1, '2026-01-01T00:00:00+00:00', 's', 'm', 'measured', 'valid')")
     conn.close()
-    assert database_service.run_migrations(db) == ["008"]
+    assert database_service.run_migrations(db)[0] == "008"
     conn = database_service.connect(db)
     assert conn.execute("SELECT COUNT(*) FROM network_flows").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM network_metrics").fetchone()[0] == 1

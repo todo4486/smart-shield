@@ -52,7 +52,7 @@ def flow_count_for_session(conn: sqlite3.Connection, session_id: int) -> int:
 def unresolved_alerts_by_severity(conn: sqlite3.Connection) -> Dict[str, int]:
     rows = conn.execute(
         "SELECT severity, COUNT(*) AS n FROM alerts "
-        "WHERE status IN ('open', 'acknowledged') GROUP BY severity"
+        "WHERE status IN ('open', 'acknowledged') AND suppressed_by_rule IS NULL GROUP BY severity"
     ).fetchall()
     return {row["severity"]: row["n"] for row in rows}
 
@@ -81,7 +81,7 @@ def recent_incidents(conn: sqlite3.Connection, limit: int = 5) -> List[sqlite3.R
 def top_open_alerts(conn: sqlite3.Connection, limit: int = 6) -> List[sqlite3.Row]:
     return conn.execute(
         "SELECT id, alert_type, severity, category, status, created_at, model_version FROM alerts "
-        "WHERE status IN ('open', 'acknowledged') ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
+        "WHERE status IN ('open', 'acknowledged') AND suppressed_by_rule IS NULL ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
         "WHEN 'medium' THEN 2 ELSE 3 END, created_at DESC, id DESC LIMIT ?",
         (limit,),
     ).fetchall()

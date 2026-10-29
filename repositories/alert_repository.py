@@ -40,8 +40,12 @@ def find_recent_by_dedup(conn: sqlite3.Connection, dedup_key: str, since: Option
 
 def list_alerts(conn: sqlite3.Connection, *, statuses: Optional[List[str]] = None,
                 severities: Optional[List[str]] = None, types: Optional[List[str]] = None,
-                limit: int = 500) -> List[sqlite3.Row]:
+                limit: int = 500, suppressed: str = "include") -> List[sqlite3.Row]:
     clauses, params = [], []
+    if suppressed == "exclude":
+        clauses.append("suppressed_by_rule IS NULL")
+    elif suppressed == "only":
+        clauses.append("suppressed_by_rule IS NOT NULL")
     for column, values in (("status", statuses), ("severity", severities), ("alert_type", types)):
         if values:
             clauses.append(f"{column} IN ({', '.join('?' for _ in values)})")
@@ -51,6 +55,10 @@ def list_alerts(conn: sqlite3.Connection, *, statuses: Optional[List[str]] = Non
     return conn.execute(
         f"SELECT * FROM alerts {where} ORDER BY created_at DESC, id DESC LIMIT ?", params
     ).fetchall()
+
+
+def set_suppressed(conn: sqlite3.Connection, alert_id: int, rule_id: int) -> None:
+    conn.execute("UPDATE alerts SET suppressed_by_rule = ? WHERE id = ?", (rule_id, alert_id))
 
 
 def update_status(conn: sqlite3.Connection, alert_id: int, values: Dict[str, Any]) -> None:

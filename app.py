@@ -59,12 +59,14 @@ else:
             st.Page("views/live_monitoring.py", title="Live Monitoring", icon=":material/monitor_heart:"),
             st.Page("views/network_map.py", title="Network Map", icon=":material/hub:"),
             st.Page("views/incident_center.py", title="Incident Center", icon=":material/crisis_alert:"),
+            st.Page("views/insights.py", title="Host insights", icon=":material/leaderboard:"),
             st.Page("views/replay.py", title="Replay / demo", icon=":material/play_circle:"),
         ],
         "Intelligence": [
             st.Page("views/security_center.py", title="Smart Shield Security", icon=":material/security:"),
             st.Page("views/predictnet.py", title="PredictNet Congestion", icon=":material/insights:"),
             st.Page("views/bandwidth.py", title="Bandwidth Management", icon=":material/tune:"),
+            st.Page("views/what_if.py", title="What-if simulator", icon=":material/stacked_bar_chart:"),
             st.Page("views/ml_lab.py", title="ML Laboratory", icon=":material/science:"),
         ],
         "Workspace": [

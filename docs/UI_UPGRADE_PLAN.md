@@ -89,3 +89,18 @@ Full tests, lint, click-through as admin and analyst, load test with the 12k-flo
 - **Dev-only limitation**: editing a source file while the server runs makes Streamlit re-import the services, which
   creates a new replay engine and closes a running replay (the old thread notices and stops). Restart the replay.
   This does not happen in normal use.
+
+## Phase 4 notes (as built)
+
+- **Migration 009** adds `suppression_rules` (author, reason, expiry ≤ 90 days, status requested/active/rejected/revoked)
+  and `alerts.suppressed_by_rule`. Rules apply to alerts raised while they are active. Suppressed alerts keep their
+  status and history and are listed under *Show → Suppressed*; they are left out of the unresolved counts, header,
+  correlation, swimlanes and network map. A host rule only matches when every flow of the alert is from/to that host.
+- **What-if** calls `bandwidth_allocation.allocate()` directly (a test checks it against the allocator on 200 random
+  inputs). "Propose as shaping policy…" (admin) saves a policy and a *proposed* recommendation; enforcing it still
+  goes through accept → apply with typed confirmation.
+- **Host insights** reuse the Network Map's host risk formula, so a host has one score everywhere.
+- **Enforcement**: apply happens in an `st.dialog` with the before/after split, exact argv and typed confirmation.
+  "Before" is the last policy Smart Shield applied (the live `tc` output is shown separately). Undo is the Revert
+  button in *Active policies* (a toast cannot hold buttons, decision 7). The dialog needs Linux `tc`, so it is
+  covered by tests with a mocked `tc` rather than in a browser on macOS.

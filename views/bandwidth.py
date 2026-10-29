@@ -227,8 +227,72 @@ with history_tab:
                             st.rerun()
 
 # --------------------------------------------------------------- enforcement
+APPLIED_TOAST_KEY = "shaping_applied_toast"
+ADMIN_ONLY = "Admin only"
+
+
+def _split_figure(before, after) -> go.Figure:
+    names = [c["name"] for c in after["classes"]]
+    previous = {c["name"]: c["allocated_bps"] for c in (before or {}).get("classes", [])}
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="Before (last policy Smart Shield applied)" if before else "Before: no Smart Shield policy",
+                         x=names, y=[previous.get(n, 0) for n in names], marker_color=COLORS["muted"]))
+    fig.add_trace(go.Bar(name="After (this recommendation)", x=names, y=[c["allocated_bps"] for c in after["classes"]],
+                         marker_color=COLORS["accent"]))
+    fig.update_layout(title="Guaranteed rate per class, before and after", barmode="group", yaxis_title="bit/s")
+    return fig
+
+
+@st.dialog("Apply shaping policy", width="large")
+def _apply_dialog(recommendation_id: int, interface: str) -> None:
+    try:
+        preview = traffic_shaping_service.plan_preview(principal, recommendation_id, interface)
+    except (ShapingError, PermissionDenied) as exc:
+        st.error(str(exc))
+        return
+    st.markdown(f"Recommendation **#{recommendation_id}** on interface **`{interface}`**. This changes real traffic "
+                "on that link. The current state is recorded first, so it can be reverted.")
+    st.plotly_chart(apply_chart_theme(_split_figure(preview["before"], preview["after"]), height=300), theme=None)
+    st.markdown("**Exactly these commands will run** (fixed operations, list arguments, no shell):")
+    st.code("\n".join(" ".join(c) for c in preview["commands"]), language="bash")
+    confirm = st.text_input(f"Type `{interface}` to confirm")
+    c1, c2 = st.columns(2)
+    if c1.button("Apply policy", type="primary", disabled=confirm != interface, width="stretch"):
+        try:
+            traffic_shaping_service.apply_recommendation(principal, recommendation_id, interface,
+                                                         confirm_interface=confirm)
+        except (ShapingError, PermissionDenied) as exc:
+            st.error(str(exc))
+        else:
+            st.session_state[APPLIED_TOAST_KEY] = (f"Applied recommendation #{recommendation_id} on {interface}. "
+                                                   "To undo, use Revert in Active policies.")
+            st.rerun()
+    if c2.button("Cancel", width="stretch"):
+        st.rerun()
+
+
+@st.dialog("Revert shaping policy")
+def _revert_dialog(interface: str) -> None:
+    st.markdown(f"Restore the state recorded before the latest policy on **`{interface}`** (the previous policy, or no "
+                "shaping at all).")
+    confirm = st.text_input(f"Type `{interface}` to confirm", key=f"revert_confirm_{interface}")
+    if st.button("Revert", type="primary", disabled=confirm != interface):
+        try:
+            traffic_shaping_service.rollback(principal, interface, confirm_interface=confirm)
+        except (ShapingError, PermissionDenied) as exc:
+            st.error(str(exc))
+        else:
+            st.session_state[APPLIED_TOAST_KEY] = f"Reverted the policy on {interface}."
+            st.rerun()
+
+
 with enforce_tab:
+    if APPLIED_TOAST_KEY in st.session_state:
+        st.toast(st.session_state.pop(APPLIED_TOAST_KEY), icon=":material/check_circle:")
     state = traffic_shaping_service.availability()
+    usable = can_enforce and state.available
+    why_disabled = ADMIN_ONLY if not can_enforce else (None if state.available else "Enforcement is not available "
+                                                         "on this server (see above)")
     if not state.available:
         st.warning("**Enforcement is not available on this server**, so recommendations stay advisory:\n\n"
                    + "\n".join(f"- {r}" for r in state.reasons))
@@ -238,56 +302,59 @@ with enforce_tab:
 2. Run Smart Shield with permission to manage queueing (`CAP_NET_ADMIN` or root), and check that `tc` is installed (`iproute2`).
 3. In `.env`, set `SMART_SHIELD_TC_ENABLED=true` and `SMART_SHIELD_TC_INTERFACES=<lab interface>`, then restart the app.
 4. Mark traffic with DSCP values that match your policy's classes. Unmatched traffic goes to a default class.
-5. Apply an **accepted** recommendation here. Use *Rollback* to restore the previous state, or *Emergency disable* to remove shaping entirely.
+5. Apply an **accepted** recommendation here. Use *Revert* to restore the previous state, or *Emergency disable* to remove shaping entirely.
 
 Recovery without the app: `sudo tc qdisc del dev <interface> root` removes everything Smart Shield configured.
 """)
     if not can_enforce:
-        st.caption("Only administrators can enforce policies.")
-    elif state.available:
-        accepted = [h for h in bandwidth_service.list_recommendations(principal) if h["status"] == "accepted"]
-        interface = st.selectbox("Interface (allow-listed)", list(state.interfaces))
+        st.caption("Only administrators can enforce policies. The controls below are shown disabled.")
+
+    section_label("Active policies")
+    active = traffic_shaping_service.active_policies(principal)
+    if not active:
+        st.caption("Smart Shield has no shaping policy applied on any interface.")
+    for item in active:
+        with st.container(border=True):
+            c1, c2 = st.columns([4, 1])
+            c1.markdown(f"**`{item['interface']}`** · recommendation #{item['recommendation_id'] or '—'} · applied "
+                        f"{format_timestamp(item['applied_at'])} by {item['applied_by'] or '—'}")
+            if c2.button("Revert", key=f"revert_{item['interface']}", disabled=not usable, help=why_disabled,
+                         width="stretch"):
+                _revert_dialog(item["interface"])
+            classes = item["policy"].get("classes", [])
+            if classes:
+                st.dataframe(pd.DataFrame([{"Class": c["name"], "Guaranteed": format_bits_rate(c["allocated_bps"]),
+                                            "Ceiling": format_bits_rate(c["maximum_bps"]), "DSCP": c.get("dscp")}
+                                           for c in classes]), hide_index=True)
+
+    section_label("Apply an accepted recommendation")
+    accepted = [h for h in bandwidth_service.list_recommendations(principal) if h["status"] == "accepted"]
+    interfaces = list(state.interfaces) or ["(none allow-listed)"]
+    c1, c2 = st.columns(2)
+    interface = c1.selectbox("Interface (allow-listed)", interfaces, disabled=not usable)
+    by_id = {h["id"]: h for h in accepted}
+    rid = c2.selectbox("Accepted recommendation", list(by_id) or [None], disabled=not usable or not by_id,
+                       format_func=lambda i: "none accepted yet" if i is None else
+                       f"#{i} · {by_id[i]['payload']['policy_name']}")
+    if usable:
         try:
             st.code(traffic_shaping_service.current_state(principal, interface), language="text")
         except ShapingError as exc:
             st.caption(f"Current state unavailable: {exc}")
-        if accepted:
-            by_id = {h["id"]: h for h in accepted}
-            rid = st.selectbox("Accepted recommendation", list(by_id),
-                               format_func=lambda i: f"#{i} · {by_id[i]['payload']['policy_name']}")
-            try:
-                commands = traffic_shaping_service.preview_apply(principal, rid, interface)
-                st.markdown("**Exactly these commands will run** (fixed operations, no shell):")
-                st.code("\n".join(" ".join(c) for c in commands), language="bash")
-            except ShapingError as exc:
-                st.error(str(exc))
-            with st.form("apply_form", border=True):
-                confirm = st.text_input(f"Type `{interface}` to confirm applying recommendation #{rid}")
-                if st.form_submit_button("Apply policy", type="primary"):
-                    try:
-                        traffic_shaping_service.apply_recommendation(principal, rid, interface, confirm_interface=confirm)
-                    except (ShapingError, PermissionDenied) as exc:
-                        st.error(str(exc))
-                    else:
-                        st.success("Applied. The previous state was recorded for rollback.")
+    if not by_id:
+        st.caption("Accept a recommendation in History before it can be applied.")
+    if st.button("Review and apply…", type="primary", icon=":material/policy:", disabled=not usable or rid is None,
+                 help=why_disabled):
+        _apply_dialog(rid, interface)
+    if st.button("Emergency disable: remove shaping from all allow-listed interfaces", disabled=not usable,
+                 help=why_disabled):
+        try:
+            traffic_shaping_service.emergency_disable(principal)
+        except (ShapingError, PermissionDenied) as exc:
+            st.error(str(exc))
         else:
-            st.info("Accept a recommendation in History before it can be applied.")
-        with st.form("rollback_form", border=True):
-            confirm_rb = st.text_input(f"Type `{interface}` to roll back to the previous state")
-            if st.form_submit_button("Roll back"):
-                try:
-                    traffic_shaping_service.rollback(principal, interface, confirm_interface=confirm_rb)
-                except (ShapingError, PermissionDenied) as exc:
-                    st.error(str(exc))
-                else:
-                    st.success("Rolled back.")
-        if st.button("Emergency disable: remove shaping from all allow-listed interfaces", type="secondary"):
-            try:
-                traffic_shaping_service.emergency_disable(principal)
-            except (ShapingError, PermissionDenied) as exc:
-                st.error(str(exc))
-            else:
-                st.success("Shaping removed.")
+            st.success("Shaping removed.")
+
     actions = traffic_shaping_service.action_history(principal)
     section_label("Policy action history")
     if actions:

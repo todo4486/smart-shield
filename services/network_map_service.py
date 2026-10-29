@@ -232,7 +232,7 @@ def _open_alerts(conn) -> List[Dict[str, Any]]:
     rows = conn.execute(
         "SELECT a.id, a.severity, a.evidence_json, EXISTS (SELECT 1 FROM incident_alerts ia JOIN incidents i "
         "ON i.id = ia.incident_id WHERE ia.alert_id = a.id AND i.status IN ('open', 'investigating')) AS in_incident "
-        "FROM alerts a WHERE a.status IN ('open', 'acknowledged')").fetchall()
+        "FROM alerts a WHERE a.status IN ('open', 'acknowledged') AND a.suppressed_by_rule IS NULL").fetchall()
     return [{"id": r["id"], "severity": r["severity"], "in_incident": bool(r["in_incident"]),
              "evidence": json.loads(r["evidence_json"]) if r["evidence_json"] else {}} for r in rows]
 

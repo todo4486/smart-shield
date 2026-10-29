@@ -25,14 +25,17 @@ def summarize(principal: Principal) -> List[Statement]:
     out: List[Statement] = []
     with database_service.session() as conn:
         alerts = {r["severity"]: r["n"] for r in conn.execute(
-            "SELECT severity, COUNT(*) AS n FROM alerts WHERE status IN ('open', 'acknowledged') GROUP BY severity")}
+            "SELECT severity, COUNT(*) AS n FROM alerts WHERE status IN ('open', 'acknowledged') "
+            "AND suppressed_by_rule IS NULL GROUP BY severity")}
         by_type = {r["alert_type"]: r["n"] for r in conn.execute(
-            "SELECT alert_type, COUNT(*) AS n FROM alerts WHERE status IN ('open', 'acknowledged') GROUP BY alert_type")}
+            "SELECT alert_type, COUNT(*) AS n FROM alerts WHERE status IN ('open', 'acknowledged') "
+            "AND suppressed_by_rule IS NULL GROUP BY alert_type")}
         incidents = {r["classification"]: r["n"] for r in conn.execute(
             "SELECT classification, COUNT(*) AS n FROM incidents WHERE status IN ('open', 'investigating') "
             "GROUP BY classification")}
         unlinked = conn.execute(
-            "SELECT COUNT(*) FROM alerts a WHERE a.status IN ('open', 'acknowledged') AND NOT EXISTS "
+            "SELECT COUNT(*) FROM alerts a WHERE a.status IN ('open', 'acknowledged') "
+            "AND a.suppressed_by_rule IS NULL AND NOT EXISTS "
             "(SELECT 1 FROM incident_alerts ia WHERE ia.alert_id = a.id)").fetchone()[0]
         risks = conn.execute(
             "SELECT p.interface_name, p.congestion_risk, p.timestamp FROM congestion_predictions p "
