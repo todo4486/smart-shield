@@ -104,3 +104,16 @@ Full tests, lint, click-through as admin and analyst, load test with the 12k-flo
   "Before" is the last policy Smart Shield applied (the live `tc` output is shown separately). Undo is the Revert
   button in *Active policies* (a toast cannot hold buttons, decision 7). The dialog needs Linux `tc`, so it is
   covered by tests with a mocked `tc` rather than in a browser on macOS.
+
+## Phase 5 notes (as built)
+
+- **No migration.** Training now stores `feature_distributions` (decile bins and shares of the TRAINING split, per
+  feature) in the model's metadata; splits and model logic are unchanged. Older models show "drift unavailable"
+  until retrained.
+- **Model health** (`views/model_health.py`): cards with data, split, held-out metrics, confusion matrix and the
+  SHA-256 check; a read-only PSI check per top feature against a replay/live session (stored flow features) or a
+  registered dataset. The warning threshold and feature count are admin settings (`model_health.drift`, audited).
+- **Reports**: one-click incident report and a weekly summary, as script-free HTML with an inline SVG timeline
+  (no PDF library is installed; print to PDF from the browser). The weekly summary leaves out DATASET REPLAY data
+  and suppressed alerts (and says how many). Forecast accuracy matches each stored forecast to the closest
+  measurement of the same link and quantity within 150 s; utilization and throughput are scored separately.

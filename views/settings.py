@@ -101,6 +101,27 @@ if saved_monitoring:
         st.toast("Monitoring settings saved.")
         st.rerun()
 
+st.subheader("Model health")
+drift_settings = settings_service.get_drift_settings()
+with st.form("drift_settings", border=True):
+    c1, c2 = st.columns(2)
+    psi_threshold = c1.number_input("Warn when a feature's PSI reaches", 0.05, 2.0, drift_settings.psi_threshold,
+                                    step=0.05, disabled=not can_edit,
+                                    help="Population Stability Index. A common rule of thumb: under 0.10 stable, "
+                                         "0.10–0.25 moderate shift, over 0.25 significant shift.")
+    top_features = c2.number_input("Features to check (most important first)", 3, 50, drift_settings.top_features,
+                                   disabled=not can_edit)
+    saved_drift = st.form_submit_button("Save model health settings", type="primary", disabled=not can_edit)
+if saved_drift:
+    try:
+        settings_service.update_drift_settings(principal, settings_service.DriftSettings(float(psi_threshold),
+                                                                                         int(top_features)))
+    except (SettingsError, PermissionDenied) as exc:
+        st.error(str(exc))
+    else:
+        st.toast("Model health settings saved.")
+        st.rerun()
+
 st.write("")
 st.caption("Link capacity and traffic classes are configured per policy under **Bandwidth Management**. The "
            "traffic-shaping backend is configured only through `.env` on the server and is off by default.")

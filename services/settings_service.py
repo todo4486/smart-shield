@@ -226,3 +226,48 @@ def update_retention_settings(principal: Principal, new: RetentionSettings) -> R
         audit_service.record(conn, user_id=principal.user_id, action="settings.update",
                              details={"key": RETENTION_KEY, "before": before, "after": asdict(validated)})
     return validated
+
+
+# ------------------------------------------------------------ model health
+
+@dataclass(frozen=True)
+class DriftSettings:
+    """When the Model health page warns about feature drift. Read-only checks: nothing is retrained."""
+
+    psi_threshold: float = 0.25
+    top_features: int = 10
+
+    def validate(self) -> "DriftSettings":
+        if not 0.05 <= float(self.psi_threshold) <= 2.0:
+            raise SettingsError("The PSI warning threshold must be between 0.05 and 2.0.")
+        if not 3 <= int(self.top_features) <= 50:
+            raise SettingsError("Check between 3 and 50 top features.")
+        return DriftSettings(float(self.psi_threshold), int(self.top_features))
+
+
+DRIFT_KEY = "model_health.drift"
+
+
+def get_drift_settings() -> DriftSettings:
+    with database_service.session() as conn:
+        row = conn.execute("SELECT value_json FROM app_settings WHERE key = ?", (DRIFT_KEY,)).fetchone()
+    if row is None:
+        return DriftSettings()
+    stored = json.loads(row["value_json"])
+    return DriftSettings(**{k: v for k, v in stored.items() if k in DriftSettings.__dataclass_fields__}).validate()
+
+
+def update_drift_settings(principal: Principal, new: DriftSettings) -> DriftSettings:
+    require_permission(principal, Permission.MANAGE_SETTINGS, action="settings.update", details={"key": DRIFT_KEY})
+    validated = new.validate()
+    before = asdict(get_drift_settings())
+    with database_service.session(write=True) as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value_json, updated_at, updated_by) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at, "
+            "updated_by = excluded.updated_by",
+            (DRIFT_KEY, json.dumps(asdict(validated), sort_keys=True), utc_now_iso(), principal.user_id),
+        )
+        audit_service.record(conn, user_id=principal.user_id, action="settings.update",
+                             details={"key": DRIFT_KEY, "before": before, "after": asdict(validated)})
+    return validated

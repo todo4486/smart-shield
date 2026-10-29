@@ -68,6 +68,7 @@ else:
             st.Page("views/bandwidth.py", title="Bandwidth Management", icon=":material/tune:"),
             st.Page("views/what_if.py", title="What-if simulator", icon=":material/stacked_bar_chart:"),
             st.Page("views/ml_lab.py", title="ML Laboratory", icon=":material/science:"),
+            st.Page("views/model_health.py", title="Model health", icon=":material/health_and_safety:"),
         ],
         "Workspace": [
             st.Page("views/reports.py", title="Reports", icon=":material/description:"),

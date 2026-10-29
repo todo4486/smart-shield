@@ -29,7 +29,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 
 from repositories import dataset_repository
-from services import audit_service, database_service, model_registry_service
+from services import audit_service, database_service, drift, model_registry_service
 from services.authorization import Permission, Principal, require_permission
 from services.dataset_service import LABEL_COLUMN
 from services.intrusion_features import (
@@ -365,6 +365,9 @@ def _train(principal: Principal, options: IntrusionTrainingOptions, progress: Pr
         "parameters": {"n_estimators": options.n_estimators, "class_weight": "balanced_subsample",
                        "random_state": RANDOM_STATE, "anomaly_target_fpr": options.anomaly_target_fpr},
         "environment": environment, "warnings": warnings,
+        # For the Model health drift check (PSI). Taken from the training split only; it does not affect training.
+        "feature_distributions": drift.training_distributions(x_train, features),
+        "feature_distributions_note": f"Decile bins and shares of the training split ({len(x_train):,} rows).",
     }
     classifier_bundle = {
         "family": "intrusion_classifier", "model": classifier, "feature_names": features,
