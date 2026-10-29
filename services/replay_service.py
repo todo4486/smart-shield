@@ -40,7 +40,6 @@ from services.authorization import Permission, Principal, require_permission
 from services.dataset_service import LABEL_COLUMN, PROTOCOL_NAMES
 from services.intrusion_features import BENIGN_LABELS, clean_label, compatibility, header_columns, load_dataset_frame
 from services.monitoring_service import SessionState, SourceType
-from services.timeutil import utc_now_iso
 
 SPEEDS = (1, 5, 10, 30)
 TICK_SECONDS = 1.0

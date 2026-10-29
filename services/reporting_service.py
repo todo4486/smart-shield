@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from services import audit_service, database_service
 from services.authorization import Permission, Principal, require_permission

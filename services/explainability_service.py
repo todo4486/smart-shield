@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from repositories import alert_repository, dataset_repository
+from repositories import alert_repository
 from services import alert_service, database_service, model_registry_service
 from services.authorization import Permission, Principal, require_permission
 from services.dataset_service import LABEL_COLUMN

@@ -6,7 +6,7 @@ from html import escape
 import streamlit as st
 
 from config import ASSETS_DIR
-from components.ui import SOURCE_LABELS, format_timestamp, section_label
+from components.ui import SOURCE_LABELS, section_label
 from services import dashboard_service, database_service, session_service
 from services.authorization import Principal
 

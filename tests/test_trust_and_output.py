@@ -5,12 +5,11 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from services import (
     alert_service, database_service, dataset_service, drift, incident_correlation_service, incident_report_service as reports,
-    intrusion_inference_service, intrusion_training_service, model_health_service as health, model_registry_service,
+    intrusion_inference_service, intrusion_training_service, model_health_service as health,
     replay_service, settings_service,
 )
 from services.authorization import PermissionDenied

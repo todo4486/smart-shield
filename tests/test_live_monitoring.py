@@ -3,7 +3,6 @@ from __future__ import annotations
 import queue
 import time
 
-import numpy as np
 import pytest
 
 from services import (

@@ -253,7 +253,7 @@ with backtest_tab:
             test_part = scored[scored["period"].isin(["test", "not used in training"])]
             if not test_part.empty:
                 mae = (test_part["actual"] - test_part["predicted"]).abs().mean()
-                st.caption(f"Mean absolute error on data not used for fitting: "
+                st.caption("Mean absolute error on data not used for fitting: "
                            + (f"{mae:.2%}" if target == "utilization_ratio" else format_bits_rate(mae))
                            + ". Training-period predictions are shown in grey; they are in-sample and look better "
                            "than real performance.")

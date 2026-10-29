@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from services import (
-    bandwidth_service, congestion_prediction_service, congestion_training_service, database_service,
+    bandwidth_service, congestion_prediction_service, congestion_training_service,
     telemetry_service, traffic_shaping_service,
 )
 from services.authorization import PermissionDenied

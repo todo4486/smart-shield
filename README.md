@@ -8,6 +8,8 @@ Intelligent Bandwidth Management.** This is a final-year Computer Science projec
 - Acceptance criteria mapped to evidence: [`docs/EVALUATION.md`](docs/EVALUATION.md)
 - Security review: [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md)
 - File formats: [`docs/TELEMETRY_SCHEMA.md`](docs/TELEMETRY_SCHEMA.md)
+- UI upgrade (SOC theme, replay, explainability, …): [`docs/UI_UPGRADE_SUMMARY.md`](docs/UI_UPGRADE_SUMMARY.md)
+- Two-minute viva demo: [`docs/VIVA_DEMO_SCRIPT.md`](docs/VIVA_DEMO_SCRIPT.md)
 
 ## What it does
 
@@ -24,22 +26,37 @@ Principles that apply everywhere:
 - **No invented percentages:** if link capacity is unknown, there is no utilization percentage.
 - **Passive monitoring only:** no scanning, packet injection or automatic blocking.
 - **Optional enforcement:** bandwidth enforcement is opt-in, admin-only, audited and reversible.
+- **Source on every screen:** a badge says whether data is `LIVE`, `COUNTERS`, `DATASET` or `DATASET REPLAY`, and a
+  replay always shows a banner. Replayed data is stored apart from real data and never mixes with it.
+- **Severity everywhere:** Info < Low < Medium < High < Critical, always shown with an icon and a label, never colour
+  alone.
 
 ## Pages
 
-| Page | Highlights |
-| --- | --- |
-| **Overview** | Health summary built from stored data, key traffic figures with provenance, and the worst open alerts from both engines |
-| **Live Monitoring** | Passive capture on admin-authorised interfaces (counters, or packets and flows), live detection with a compatible model, and session history with charts |
-| **Incident Center** | Correlated incidents with timeline, measured traffic change, model outputs, rationale and investigation steps, plus triage |
-| **Smart Shield Security** | Run detection on datasets; alerts grouped per attack type and deduplicated; triage with history; severity rules |
-| **PredictNet Congestion** | Forecasts per horizon with typical error, forecast-vs-actual charts, risk assessment, congestion history and model evaluation |
-| **Bandwidth Management** | Traffic-class policies, recommendations with rationale and constraint checks, review, and optional Linux `tc` enforcement with rollback |
-| **ML Laboratory** | Data import and validation, Smart Shield and PredictNet training and evaluation, and a SHA-256-verified model registry |
-| **Reports** | Period reports from stored data, with CSV export (formula-safe) and a printable HTML report |
-| **Settings** | PredictNet thresholds, horizons and alert rules; monitoring interfaces and latency target (admin) |
-| **Administration** | Users and roles (the last admin is protected), the audit log, and data retention |
-| **My account** | Change password |
+Every page has the header strip: network health ring, flows per second, active incidents, highest link risk,
+models loaded (✓ = SHA-256 verified) and the data-source badge. New high or critical incidents pop up as toasts.
+
+| Section | Page | Highlights |
+| --- | --- | --- |
+| Monitor | **Overview** | Health summary built from stored data, key traffic figures with provenance, and the worst open alerts from both engines |
+| | **Live Monitoring** | Passive capture on admin-authorised interfaces (counters, or packets and flows), live detection with a compatible model, and session history with charts |
+| | **Network Map** | Hosts and links from stored flows: thickness = throughput, colour = link risk, rings = worst open alert, moving dots on busy links, pulsing hosts in incidents; host panel with flows, alerts, incidents, forecast and risk score |
+| | **Incident Center** | Security and congestion swimlanes with incident brackets; Acknowledge → Assign → Resolve; notes and history; shareable `?incident=N` links; MITRE ATT&CK badges; "Not an attack" for congestion-only incidents |
+| | **Host insights** | Host risk leaderboard with trend sparklines, top talkers, hour × weekday heatmap, subnet → port → destination Sankey |
+| | **Replay / demo** | Play a labelled dataset through the real models at 1×–30× (pause, speed, restart, stop), clearly labelled DATASET REPLAY; admins can clear replay data |
+| Intelligence | **Smart Shield Security** | Run detection on datasets; alerts with ATT&CK badges and a **"Why was this flagged?"** panel; triage; **Noise control** suppression rules (admins create, analysts request) |
+| | **PredictNet Congestion** | Per-link risk gauges, forecast with error band, threshold lines and a "now" marker, "Congestion likely in ~N min" card, model vs baselines |
+| | **Bandwidth Management** | Policies, recommendations with animated water-filling, review, and optional Linux `tc` enforcement through a confirmation dialog (before/after split, exact commands, typed confirmation), Active policies with Revert |
+| | **What-if simulator** | Sandbox for capacity, classes, demands and weights using the same allocator; admins can propose the result as a policy |
+| | **ML Laboratory** | Data import and validation, Smart Shield and PredictNet training and evaluation, and a SHA-256-verified model registry |
+| | **Model health** | Model cards (data, split, test metrics, confusion matrix, verification) and a read-only PSI drift check |
+| Workspace | **Reports** | Period report (CSV + printable HTML), one-click incident report, weekly summary with forecast accuracy |
+| | **How it works** | Step-by-step walk-through of one real stored flow from capture to incident |
+| | **Settings** | Your display (reduce motion); PredictNet thresholds and horizons; monitoring interfaces; drift warning level (admin) |
+| | **Administration** | Users and roles (the last admin is protected), the audit log, and data retention |
+| | **My account** | Change password |
+
+Light or dark theme: ⋮ menu → Settings. **Reduce motion** (Settings → Your display) turns off all animation.
 
 ## Quick start
 
@@ -74,6 +91,21 @@ Open http://localhost:8501. The **first account you register becomes the adminis
 
 [`samples/`](samples/README.md) contains clearly labelled synthetic CSVs and a 7-step walkthrough: import telemetry,
 train and detect, forecast, correlate into a "Security + congestion" incident, then generate a report.
+
+### Replay mode for a demo
+
+Replay plays a labelled dataset through the real detection pipeline so the whole UI reacts as if the traffic were
+arriving: the map fills, alerts and incidents appear, toasts pop up. It never touches the network.
+
+1. Sign in as an admin. In **ML Laboratory → Data sources → Register intrusion dataset**, register `samples/SAMPLE_intrusion_train_day_synthetic.csv` and
+   `samples/SAMPLE_intrusion_attack_during_peak_synthetic.csv`, train on the train-day file and activate the models.
+2. Open **Monitor → Replay / demo**, pick the *attack during peak* dataset, the **Port scan → DDoS** scenario and
+   **30×**, then **Start replay**. (Optional: enter a link capacity so PredictNet can forecast utilization.)
+3. Open **Network Map** and **Incident Center** while it plays. Every page shows the amber DATASET REPLAY banner.
+4. Pause, change speed or restart from the Replay page. Afterwards an admin can **Clear replay data** in one step.
+
+Rows keep their own timestamps: the banner shows the replay clock in the dataset's time. Replay sessions are stored
+under their own source type, correlated only with each other, and left out of the weekly summary.
 
 ## Operator commands
 
@@ -130,7 +162,7 @@ Interfaces for live monitoring, the latency target and retention are configured 
 
 ## Testing
 
-`pytest -q` runs about 260 tests in about 75 seconds. They cover:
+`pytest -q` runs 399 tests in about 90 seconds. They cover:
 
 - authentication, roles and permissions;
 - database constraints and schema drift;
@@ -141,7 +173,11 @@ Interfaces for live monitoring, the latency target and retention are configured 
 - bandwidth allocation invariants (500 randomized cases) and shaping guards;
 - correlation scenarios A–D;
 - flow extraction and the live-monitor lifecycle (including a real spawned process);
-- reports, retention, page rendering, and an end-to-end run on the sample files.
+- reports, retention, page rendering, and an end-to-end run on the sample files;
+- the UI upgrade: severity and source rules, health score, network map aggregation and layout, incident triage and
+  permalinks, replay (including data separation and clearing), explanations, MITRE mapping, suppression rules,
+  what-if (checked against the allocator on 200 random cases), host insights, enforcement preview, PSI drift, and
+  incident and weekly reports.
 
 ## Known limitations
 
@@ -158,3 +194,9 @@ Interfaces for live monitoring, the latency target and retention are configured 
 - **Correlation:** dataset-based Smart Shield alerts carry no interface, so they are correlated with congestion by time only.
 - **Training speed:** models train inside the app process; a 200k-row run takes about a minute.
 - **Untested platforms:** Windows and Linux have not been run end to end. Development and verification were done on macOS.
+- **Enforcement dialog:** it needs Linux `tc`, so it is verified by tests with a mocked `tc`, not in a browser on macOS.
+- **Map clicks:** clicking a host on the Network Map uses Plotly selection events; the "Or pick a host" list under the
+  map always works.
+- **Drift check:** models trained before the UI upgrade have no stored training distributions; retrain them once.
+- **Replay and code edits:** editing source files while the server runs reloads the services and stops a running replay.
+- **PDF:** reports are HTML pages made to print; use the browser's Print → Save as PDF.
