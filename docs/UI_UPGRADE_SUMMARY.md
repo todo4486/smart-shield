@@ -109,7 +109,8 @@ and is not in `requirements.txt`.
   with the reason.
 - **Code edits during a replay:** Streamlit reloads the services and the running replay stops (the old thread notices
   and exits cleanly). Restart the replay. Not an issue in normal use.
-- **Screenshots:** not included yet. The browser pane used for testing was too small to capture usable images.
+- **Screenshots:** taken by hand (the browser pane used for testing was too small to capture them); the shot list is
+  in [`screenshots/README.md`](screenshots/README.md).
 
 ## Final checks (Phase 6)
 

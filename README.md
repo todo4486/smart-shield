@@ -58,6 +58,18 @@ models loaded (✓ = SHA-256 verified) and the data-source badge. New high or cr
 
 Light or dark theme: ⋮ menu → Settings. **Reduce motion** (Settings → Your display) turns off all animation.
 
+## Screenshots
+
+Taken during a replay of the synthetic sample data (shot list: [`docs/screenshots/`](docs/screenshots/README.md)).
+
+| | |
+| --- | --- |
+| ![Replay / demo with the DATASET REPLAY banner](docs/screenshots/replay.png) | ![Network Map during a replay](docs/screenshots/network-map.png) |
+| ![Incident Center swimlanes and ATT&CK badges](docs/screenshots/incident-center.png) | ![Why was this flagged? panel](docs/screenshots/explain.png) |
+| ![PredictNet gauges and forecast band](docs/screenshots/predictnet.png) | ![What-if simulator water-filling](docs/screenshots/what-if.png) |
+| ![Host insights leaderboard](docs/screenshots/insights.png) | ![Model health card and drift check](docs/screenshots/model-health.png) |
+| ![How it works walk-through](docs/screenshots/how-it-works.png) | |
+
 ## Quick start
 
 **Python 3.11 or newer is recommended** (verified on 3.11.17 with a clean `pip-audit`). Python 3.9 still runs the app, but its dependency releases carry known security advisories.
