@@ -26,7 +26,7 @@ from services.timeutil import parse_iso, to_iso
 HOST_WINDOW_SECONDS = 15
 FLAG_WINDOW_SECONDS = 300
 HISTORY_SAMPLES = 300
-LIVE_SOURCE_TYPES = ("live_capture",)
+LIVE_SOURCE_TYPES = ("live_capture", "simulation")
 # Well-known destination ports only. It describes the port, not the application behind it.
 SERVICE_PORTS = {
     20: "File transfer", 21: "File transfer", 22: "Remote access", 23: "Remote access", 25: "Email", 53: "DNS",
@@ -74,6 +74,7 @@ class LiveSnapshot:
     hosts: List[HostRow] = field(default_factory=list)
     history: List[Dict[str, Any]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    provenance: str = "measured"  # "simulated" for synthetic traffic, whose rates are calculated, never measured
 
 
 # ------------------------------------------------------------------ pure helpers
@@ -174,20 +175,25 @@ def _local_addresses() -> Set[str]:
 # ------------------------------------------------------------------ service API
 
 def snapshot(principal: Principal, *, live_running: bool = False, live_session_id: Optional[int] = None,
-             live_active_flows: Optional[int] = None) -> LiveSnapshot:
-    """`live_*` describe the in-process capture (from the live monitor), which the database cannot know."""
+             live_active_flows: Optional[int] = None, simulation_session_id: Optional[int] = None) -> LiveSnapshot:
+    """`live_*` and `simulation_session_id` describe what is running in this process, which the database cannot know.
+
+    A running capture wins, then a running simulation, then the newest stored session of either kind.
+    """
     require_permission(principal, Permission.VIEW_DASHBOARD, action="live_network.view")
     with database_service.session() as conn:
         session = None
-        if live_running and live_session_id is not None:
-            session = conn.execute("SELECT * FROM monitoring_sessions WHERE id = ?", (live_session_id,)).fetchone()
+        running_id = live_session_id if live_running and live_session_id is not None else simulation_session_id
+        if running_id is not None:
+            session = conn.execute("SELECT * FROM monitoring_sessions WHERE id = ?", (running_id,)).fetchone()
         session = session or telemetry_repository.latest_session_with_metrics(conn, LIVE_SOURCE_TYPES)
         if session is None:
             return LiveSnapshot(None, data_source.classify(None), False, None, None, None, None, None, None, None, None,
                                 None, None, None,
-                                notes=["No live capture has run yet. Start one in Live Monitoring."])
+                                notes=["No live capture or simulation has run yet. Start a capture in Live Monitoring, "
+                                       "or a simulation in Monitor → Simulation."])
         configuration = json.loads(session["configuration_json"]) if session["configuration_json"] else {}
-        running = bool(live_running and session["id"] == live_session_id)
+        running = session["id"] == running_id
         mode = configuration.get("mode")
         metrics = [dict(r) for r in reversed(telemetry_repository.recent_metrics(conn, session["id"], HISTORY_SAMPLES))]
         newest_host = telemetry_repository.newest_host_metric_time(conn, session["id"])
@@ -207,7 +213,10 @@ def snapshot(principal: Principal, *, live_running: bool = False, live_session_i
     hosts = summarize_hosts(samples, flows, _local_addresses(), intervals)
     notes: List[str] = []
     if not running:
-        notes.append("No capture is running, so this is the last capture's data, not the network right now.")
+        what = "simulation" if session["source_type"] == "simulation" else "capture"
+        notes.append(f"No {what} is running, so this is the last {what}'s data, not the network right now.")
+    if session["source_type"] == "simulation":
+        notes.append("Simulated: every rate here is calculated from synthetic traffic created in memory. No packets exist.")
     if mode != "packets":
         notes.append("Per-host bandwidth is unavailable: this capture ran in interface-counter mode. Packet capture "
                      "is needed to see individual hosts.")
@@ -218,6 +227,7 @@ def snapshot(principal: Principal, *, live_running: bool = False, live_session_i
         session["id"], data_source.classify(session["source_type"], live_running=running, live_mode=mode), running, mode,
         session["interface_name"], latest["timestamp"] if latest else None, figures["incoming_bps"],
         figures["outgoing_bps"], figures["incoming_pps"], figures["outgoing_pps"], capacity, figures["utilization"],
-        figures["available_bps"], live_active_flows if running else None, hosts,
+        figures["available_bps"], live_active_flows if running and session["source_type"] == "live_capture" else None, hosts,
         [{"timestamp": m["timestamp"], "incoming_bps": link_figures(m, None)["incoming_bps"],
-          "outgoing_bps": link_figures(m, None)["outgoing_bps"]} for m in metrics], notes)
+          "outgoing_bps": link_figures(m, None)["outgoing_bps"]} for m in metrics], notes,
+        "simulated" if session["source_type"] == "simulation" else "measured")

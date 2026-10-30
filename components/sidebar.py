@@ -40,7 +40,7 @@ def render_sidebar(principal: Principal) -> None:
             source += f" · {status.interface_name}"
         detail = f"Last session: {source}"
     # A replay is not monitoring: say what is actually running.
-    heading = "Replay" if status.source_type == "replay" else "Monitoring"
+    heading = {"replay": "Replay", "simulation": "Simulation"}.get(status.source_type, "Monitoring")
 
     with st.sidebar:
         st.divider()

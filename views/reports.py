@@ -92,7 +92,8 @@ def _incident_tab() -> None:
         return
     by_id = {i["id"]: i for i in incidents}
     incident_id = st.selectbox("Incident", list(by_id), format_func=lambda i: f"#{i} · {by_id[i]['title']} · "
-                               f"{by_id[i]['status']}" + (" · DATASET REPLAY" if by_id[i].get("is_replay") else ""))
+                               f"{by_id[i]['status']}" + (" · DATASET REPLAY" if by_id[i].get("is_replay") else
+                                                       " · SIMULATION" if by_id[i].get("is_simulation") else ""))
     st.caption("Summary, timeline, affected hosts, MITRE ATT&CK mapping, why the alerts were raised, actions taken "
                "(from the audit log) and analyst notes. Generating it is audited.")
     if st.button("Build incident report", type="primary", icon=":material/summarize:"):

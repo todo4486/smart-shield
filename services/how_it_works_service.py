@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from repositories.incident_repository import IS_REPLAY_ALERT, REPLAY_SOURCE_NAME
+from repositories.incident_repository import IS_REPLAY_ALERT, REPLAY_SOURCE_NAME, SIMULATION_SOURCE_NAME
 from services import data_source, database_service, mitre
 from services.authorization import Permission, Principal, require_permission
 
@@ -89,6 +89,8 @@ def build_trace(flow: Optional[Dict[str, Any]], session: Optional[Dict[str, Any]
         if session.get("dataset_name"):
             capture.facts.append(("Dataset", str(session["dataset_name"])))
         capture.facts.append(("Session started", str(session.get("started_at"))))
+    if source.kind == data_source.SIMULATION:
+        capture.note = "This flow does not exist on any network: Smart Shield created its packets in memory."
     if source.kind in (data_source.DATASET, data_source.REPLAY):
         capture.note = ("This flow was not captured here: it is a recorded dataset row"
                         + (" being replayed" if source.kind == data_source.REPLAY else "") + ".")
@@ -191,10 +193,11 @@ def sample_trace(principal: Principal, *, flagged_only: bool = True, offset: int
                 "ON ia.incident_id = i.id LEFT JOIN users u ON u.id = i.assigned_to WHERE ia.alert_id = ?",
                 (alert["id"],)).fetchone()
             incident = dict(row) if row else None
-        replay = session["source_type"] == "replay"
+        origin = {"replay": "replay", "simulation": "simulation"}.get(session["source_type"], "real")
         forecast_row = conn.execute(
-            "SELECT * FROM congestion_predictions WHERE (source_name = ?) = ? ORDER BY timestamp DESC, id DESC LIMIT 1",
-            (REPLAY_SOURCE_NAME, int(replay))).fetchone()
+            "SELECT * FROM congestion_predictions WHERE CASE source_name WHEN ? THEN 'replay' WHEN ? THEN 'simulation' "
+            "ELSE 'real' END = ? ORDER BY timestamp DESC, id DESC LIMIT 1",
+            (REPLAY_SOURCE_NAME, SIMULATION_SOURCE_NAME, origin)).fetchone()
     stages = build_trace(flow, session, alert, incident, dict(forecast_row) if forecast_row else None,
                          live_running=live_running and session["source_type"] == "live_capture")
     return {"stages": stages, "flow_id": flow["id"], "candidates": int(candidates), "flagged_only": flagged_only}

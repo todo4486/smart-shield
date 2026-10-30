@@ -32,6 +32,7 @@ def _prepare_database(db_path: str) -> str:
     # No capture worker or replay survives a server restart, so close sessions left open by a previous process.
     monitoring_service.recover_interrupted_sessions("live_capture")
     monitoring_service.recover_interrupted_sessions("replay")
+    monitoring_service.recover_interrupted_sessions("simulation")
     return db_path
 
 
@@ -61,6 +62,7 @@ else:
             st.Page("views/incident_center.py", title="Incident Center", icon=":material/crisis_alert:"),
             st.Page("views/insights.py", title="Host insights", icon=":material/leaderboard:"),
             st.Page("views/replay.py", title="Replay / demo", icon=":material/play_circle:"),
+            st.Page("views/simulation.py", title="Simulation", icon=":material/experiment:"),
         ],
         "Intelligence": [
             st.Page("views/security_center.py", title="Smart Shield Security", icon=":material/security:"),

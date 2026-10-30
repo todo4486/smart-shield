@@ -31,6 +31,7 @@ class SourceType(str, Enum):
     FLOW_IMPORT = "flow_import"
     LIVE_CAPTURE = "live_capture"
     REPLAY = "replay"  # a labelled dataset replayed through the pipeline (DATASET REPLAY, never live)
+    SIMULATION = "simulation"  # synthetic traffic records created in memory (never packets, never a measurement)
 
 
 ALLOWED_TRANSITIONS = {
@@ -157,7 +158,7 @@ def recover_interrupted_sessions(source_type: str = "live_capture") -> int:
     Called once per type by the singleton that owns it (live monitor, replay engine), so creating one never
     closes a session the other is running.
     """
-    what = "replay" if source_type == SourceType.REPLAY.value else "capture"
+    what = {SourceType.REPLAY.value: "replay", SourceType.SIMULATION.value: "simulation"}.get(source_type, "capture")
     with database_service.session(write=True) as conn:
         rows = conn.execute(
             "SELECT id, status FROM monitoring_sessions WHERE source_type = ? "

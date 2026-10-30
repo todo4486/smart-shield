@@ -15,14 +15,17 @@ LIVE = "live"
 COUNTERS = "counters"
 DATASET = "dataset"
 REPLAY = "replay"
+SIMULATION = "simulation"
 NONE = "none"
 
-LABELS = {LIVE: "LIVE", COUNTERS: "COUNTERS", DATASET: "DATASET", REPLAY: "DATASET REPLAY", NONE: "NO DATA"}
+LABELS = {LIVE: "LIVE", COUNTERS: "COUNTERS", DATASET: "DATASET", REPLAY: "DATASET REPLAY", SIMULATION: "SIMULATION",
+          NONE: "NO DATA"}
 DESCRIPTIONS = {
     LIVE: "Passive capture running now: interface counters plus flows from packets.",
     COUNTERS: "Passive capture running now in interface-counter mode: rates only, no flows.",
     DATASET: "Imported or registered data, not live traffic.",
     REPLAY: "A labelled dataset replayed through the pipeline. Nothing here is live traffic.",
+    SIMULATION: "Synthetic traffic created in memory by Smart Shield. No packets exist; nothing here is a measurement.",
     NONE: "Nothing has been captured or imported yet.",
 }
 
@@ -46,6 +49,8 @@ def classify(source_type: Optional[str], *, live_running: bool = False, live_mod
     """Badge for a session. A live session only counts as LIVE/COUNTERS while capture is running."""
     if source_type == "replay":
         return DataSource(REPLAY, detail)
+    if source_type == "simulation":
+        return DataSource(SIMULATION, detail)
     if source_type == "live_capture" and live_running:
         return DataSource(LIVE if live_mode == "packets" else COUNTERS, detail)
     if source_type in ("live_capture", "dataset", "historical_import", "flow_import"):

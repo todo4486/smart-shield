@@ -249,4 +249,4 @@ def test_live_tab_renders_for_both_roles_without_data(admin_user, analyst_user):
         at.switch_page("views/bandwidth.py")
         at.run()
         assert not at.exception
-        assert any("No live capture has run yet" in c.value for c in at.caption)
+        assert any("No live capture or simulation has run yet" in c.value for c in at.caption)

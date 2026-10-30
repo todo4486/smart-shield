@@ -52,7 +52,7 @@ class HeaderData:
     models_total_families: int
     open_alerts: Dict[str, int] = field(default_factory=dict)
     incidents: List[IncidentNotice] = field(default_factory=list)
-    flows_basis: Optional[str] = None  # "live" (finished flows/s) or "replay" (replayed rows/s, wall clock)
+    flows_basis: Optional[str] = None  # "live" (finished flows/s), "replay" (rows/s) or "simulation" (sampled flows/s)
 
 
 def health_score(open_alerts: Dict[str, int], top_utilization: Optional[float], thresholds: Dict[str, float],
@@ -90,7 +90,8 @@ def new_high_incidents(incidents: List[IncidentNotice], last_seen_id: Optional[i
 
 def get_header(principal: Principal, *, live_running: bool = False, live_mode: Optional[str] = None,
                live_session_id: Optional[int] = None, replay_running: bool = False,
-               replay_flows_per_second: Optional[float] = None) -> HeaderData:
+               replay_flows_per_second: Optional[float] = None, simulation_running: bool = False,
+               simulation_flows_per_second: Optional[float] = None) -> HeaderData:
     """`live_*` describe the in-process capture (from the live monitor) and `replay_flows_per_second` the running
     replay (from the replay engine): the database cannot know either."""
     require_permission(principal, Permission.VIEW_DASHBOARD, action="dashboard.view")
@@ -111,6 +112,8 @@ def get_header(principal: Principal, *, live_running: bool = False, live_mode: O
     if replay_running and source.kind not in (data_source.LIVE, data_source.COUNTERS):
         # A replay in progress is what changes on screen, even if a dataset was scored after it started.
         source = data_source.classify("replay")
+    if simulation_running and source.kind not in (data_source.LIVE, data_source.COUNTERS):
+        source = data_source.classify("simulation")
     top = max(utilization, key=lambda r: r["utilization_ratio"], default=None)
     top_utilization = float(top["utilization_ratio"]) if top is not None else None
     incidents = [IncidentNotice(r["id"], r["title"], r["top_severity"], r["classification"]) for r in incident_rows]
@@ -124,6 +127,8 @@ def get_header(principal: Principal, *, live_running: bool = False, live_mode: O
         flows_per_second, flows_basis = flows_recent / FLOW_RATE_WINDOW_SECONDS, "live"
     elif replay_running and source.kind == data_source.REPLAY and replay_flows_per_second is not None:
         flows_per_second, flows_basis = replay_flows_per_second, "replay"
+    elif simulation_running and source.kind == data_source.SIMULATION and simulation_flows_per_second is not None:
+        flows_per_second, flows_basis = simulation_flows_per_second, "simulation"
     return HeaderData(
         health=score, health_level=health_level(score), source=source, flows_basis=flows_basis,
         flows_per_second=flows_per_second,

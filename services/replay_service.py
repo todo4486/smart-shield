@@ -542,7 +542,7 @@ class ReplayEngine:
 
     def _correlate(self) -> None:
         try:
-            run = incident_correlation_service.correlate(self._principal)
+            run = incident_correlation_service.correlate(self._principal, origin="replay")
         except Exception as exc:  # correlation problems must not stop the replay
             with self._lock:
                 self.status.last_error = f"Correlation failed: {exc}"

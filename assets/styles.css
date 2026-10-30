@@ -51,6 +51,7 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .ss-chip-derived    { color: #93C5FD; border-color: rgba(59,130,246,0.45); background: rgba(59,130,246,0.10); }
 .ss-chip-predicted  { color: #C4B5FD; border-color: rgba(139,92,246,0.45); background: rgba(139,92,246,0.10); }
 .ss-chip-configured { color: #FCD34D; border-color: rgba(245,158,11,0.45); background: rgba(245,158,11,0.10); }
+.ss-chip-simulated  { color: #F0ABFC; border-color: rgba(217,70,239,0.5); background: rgba(217,70,239,0.10); }
 .ss-chip-unavailable{ color: var(--ss-muted); border-color: var(--ss-border); background: rgba(139,151,173,0.08); }
 
 /* Role badge and status */
@@ -127,6 +128,7 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .ss-src-counters { color: #67E8F9; border-color: rgba(34,211,238,0.5); background: rgba(34,211,238,0.10); }
 .ss-src-dataset  { color: #93C5FD; border-color: rgba(59,130,246,0.5); background: rgba(59,130,246,0.10); }
 .ss-src-replay   { color: #FCD34D; border-color: rgba(245,158,11,0.55); background: rgba(245,158,11,0.12); }
+.ss-src-simulation { color: #F0ABFC; border-color: rgba(217,70,239,0.55); background: rgba(217,70,239,0.12); }
 .ss-src-none     { color: var(--ss-muted); border-color: var(--ss-border); background: transparent; }
 .ss-src-live .ss-pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ss-ok); animation: ss-pulse 1.6s ease-out infinite; }
 
@@ -141,6 +143,8 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .ss-ring-text b { display: block; color: var(--ss-text); font-size: 0.86rem; }
 .ss-ring-text span { color: var(--ss-muted); font-size: 0.72rem; }
 .ss-banner-replay { background: repeating-linear-gradient(135deg, rgba(245,158,11,0.16) 0 12px, rgba(245,158,11,0.08) 12px 24px); border: 1px solid rgba(245,158,11,0.55); color: #FCD34D; border-radius: 10px; padding: 0.45rem 0.9rem; font-family: var(--ss-mono); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; margin: 0 0 0.8rem 0; }
+
+.ss-banner-simulation { background: repeating-linear-gradient(135deg, rgba(217,70,239,0.16) 0 12px, rgba(217,70,239,0.08) 12px 24px); border: 1px solid rgba(217,70,239,0.55); color: #F0ABFC; border-radius: 10px; padding: 0.45rem 0.9rem; font-family: var(--ss-mono); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; margin: 0 0 0.8rem 0; }
 
 /* Motion: short, ease-out, meaningful only */
 .ss-kpi, .ss-card, .ss-strip-cell { transition: border-color var(--ss-motion) ease-out, background-color var(--ss-motion) ease-out; }

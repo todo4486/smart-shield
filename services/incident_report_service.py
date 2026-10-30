@@ -6,7 +6,7 @@ stored forecasts and measurements. No PDF library is installed, so reports are H
 
 Weekly summary
 * Covers alerts and incidents raised in the 7 days before the chosen end, and forecasts made in that period.
-* DATASET REPLAY data is left out (it is not network activity), and the report says how much was left out.
+* DATASET REPLAY and SIMULATION data are left out (not network activity), and the report says how much was left out.
 * Forecast accuracy compares each stored forecast with the measurement stored for the same link closest to
   the forecast's target time (within a tolerance). Forecasts with no matching measurement are counted, not
   guessed. Utilization forecasts are compared with measured utilization, throughput with throughput.
@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from html import escape
 from typing import Any, Dict, List, Optional, Sequence
 
-from repositories.incident_repository import IS_REPLAY_ALERT, REPLAY_SOURCE_NAME
+from repositories.incident_repository import IS_REPLAY_ALERT, IS_SIMULATION_ALERT, REPLAY_SOURCE_NAME, SIMULATION_SOURCE_NAME
 from services import (
     audit_service, database_service, explainability_service, incident_correlation_service as correlation,
     mitre,
@@ -194,6 +194,9 @@ def build_incident_report(principal: Principal, incident_id: int) -> IncidentRep
     if incident.is_replay:
         caveats.insert(0, "DATASET REPLAY: this incident was built from recorded, labelled data replayed through the "
                           "pipeline. It is not live network activity.")
+    if incident.is_simulation:
+        caveats.insert(0, "SIMULATION: this incident was built from synthetic traffic created in memory. No packets "
+                          "existed and nothing here happened on a network.")
     if incident.not_an_attack:
         caveats.insert(0, "Not an attack: this incident contains only congestion or performance evidence.")
     report = IncidentReport(
@@ -216,7 +219,7 @@ def incident_report_html(report: IncidentReport) -> str:
     badges = "".join(f"<span class='badge'>{escape(b)}</span>" for b in (
         [f"Severity: {report.severity or 'none'}", f"Status: {i.status}", f"Classification: {i.classification}",
          f"Evidence: {report.strength['level']} (rule-based)"]
-        + (["DATASET REPLAY"] if i.is_replay else []) + (["Not an attack"] if i.not_an_attack else [])))
+        + (["DATASET REPLAY"] if i.is_replay else []) + (["SIMULATION"] if i.is_simulation else []) + (["Not an attack"] if i.not_an_attack else [])))
     parts = [
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>",
         f"<title>{escape(f'Incident #{i.id} report')}</title>{_STYLE}</head><body>",
@@ -276,24 +279,25 @@ def build_weekly_summary(principal: Principal, end: datetime) -> WeeklySummary:
     s, e = to_iso(start), to_iso(end)
     with database_service.session() as conn:
         rows = [dict(r) for r in conn.execute(
-            f"SELECT a.*, {IS_REPLAY_ALERT} AS is_replay FROM alerts a WHERE a.created_at >= ? AND a.created_at < ?",
+            f"SELECT a.*, {IS_REPLAY_ALERT} AS is_replay, {IS_SIMULATION_ALERT} AS is_simulation FROM alerts a "
+            "WHERE a.created_at >= ? AND a.created_at < ?",
             (s, e))]
         incidents = [dict(r) for r in conn.execute(
             "SELECT i.id, i.title, i.classification, i.status, i.window_start, i.created_at, "
             "(SELECT COUNT(*) FROM incident_alerts ia WHERE ia.incident_id = i.id) AS alerts, "
             "(SELECT a.severity FROM incident_alerts ia JOIN alerts a ON a.id = ia.alert_id WHERE ia.incident_id = i.id "
             " ORDER BY CASE a.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END "
-            " LIMIT 1) AS severity FROM incidents i WHERE i.is_replay = 0 AND i.created_at >= ? AND i.created_at < ?",
+            " LIMIT 1) AS severity FROM incidents i WHERE i.is_replay = 0 AND i.is_simulation = 0 AND i.created_at >= ? AND i.created_at < ?",
             (s, e))]
         predictions = [dict(r) for r in conn.execute(
             "SELECT timestamp, interface_name, forecast_horizon_seconds, predicted_utilization_ratio, "
             "predicted_throughput_bps, congestion_risk FROM congestion_predictions WHERE timestamp >= ? "
-            "AND timestamp < ? AND source_name != ?", (s, e, REPLAY_SOURCE_NAME))]
+            "AND timestamp < ? AND source_name NOT IN (?, ?)", (s, e, REPLAY_SOURCE_NAME, SIMULATION_SOURCE_NAME))]
         measurements = [dict(r) for r in conn.execute(
             "SELECT timestamp, interface_name, utilization_ratio, throughput_bps FROM network_metrics "
             "WHERE timestamp >= ? AND timestamp < ? AND COALESCE(session_id IN (SELECT id FROM monitoring_sessions "
-            "WHERE source_type = 'replay'), 0) = 0", (s, to_iso(end + timedelta(days=1))))]
-    real = [r for r in rows if not r["is_replay"]]
+            "WHERE source_type IN ('replay', 'simulation')), 0) = 0", (s, to_iso(end + timedelta(days=1))))]
+    real = [r for r in rows if not r["is_replay"] and not r["is_simulation"]]
     for r in real:
         r["evidence"] = json.loads(r["evidence_json"]) if r["evidence_json"] else {}
     active = [r for r in real if r["suppressed_by_rule"] is None]
@@ -318,8 +322,8 @@ def build_weekly_summary(principal: Principal, end: datetime) -> WeeklySummary:
     summary.notes.append("Alerts and incidents are counted by when Smart Shield raised them; forecasts by the network "
                          "time they were made for.")
     if summary.replay_alerts_left_out:
-        summary.notes.append(f"{summary.replay_alerts_left_out:,} DATASET REPLAY alert(s) were left out: replays are "
-                             "not network activity.")
+        summary.notes.append(f"{summary.replay_alerts_left_out:,} DATASET REPLAY or SIMULATION alert(s) were left out: "
+                             "they are not network activity.")
     if summary.suppressed_alerts:
         summary.notes.append(f"{summary.suppressed_alerts:,} alert(s) were suppressed by rules and are not counted "
                              "above; they are still stored.")

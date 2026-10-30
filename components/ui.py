@@ -14,6 +14,7 @@ SOURCE_LABELS = {
     "flow_import": "Flow records",
     "live_capture": "Live capture",
     "replay": "DATASET REPLAY",
+    "simulation": "SIMULATION",
 }
 
 PROVENANCE_LABELS = {
@@ -22,6 +23,7 @@ PROVENANCE_LABELS = {
     "predicted": "Predicted",
     "configured": "Configured",
     "unavailable": "Unavailable",
+    "simulated": "Simulated",
 }
 
 
@@ -34,7 +36,7 @@ def page_header(title: str, subtitle: str, eyebrow: str = "Smart Shield") -> Non
 
 
 _SOURCE_CLASSES = {"live": "ss-src-live", "counters": "ss-src-counters", "dataset": "ss-src-dataset",
-                   "replay": "ss-src-replay", "none": "ss-src-none"}
+                   "replay": "ss-src-replay", "simulation": "ss-src-simulation", "none": "ss-src-none"}
 
 
 def source_badge(source) -> str:

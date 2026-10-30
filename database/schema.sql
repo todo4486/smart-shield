@@ -158,7 +158,7 @@ CREATE TABLE incidents (
     created_by                 INTEGER REFERENCES users (id) ON DELETE SET NULL,
     created_at                 TEXT    NOT NULL,
     updated_at                 TEXT    NOT NULL
-, investigation_notes TEXT, assigned_to INTEGER REFERENCES users (id) ON DELETE SET NULL, is_replay INTEGER NOT NULL DEFAULT 0 CHECK (is_replay IN (0, 1)));
+, investigation_notes TEXT, assigned_to INTEGER REFERENCES users (id) ON DELETE SET NULL, is_replay INTEGER NOT NULL DEFAULT 0 CHECK (is_replay IN (0, 1)), is_simulation INTEGER NOT NULL DEFAULT 0 CHECK (is_simulation IN (0, 1)));
 
 CREATE TABLE login_attempts (
     id            INTEGER PRIMARY KEY,
@@ -186,7 +186,7 @@ CREATE TABLE model_registry (
 CREATE TABLE "monitoring_sessions" (
     id                  INTEGER PRIMARY KEY,
     user_id             INTEGER REFERENCES users (id) ON DELETE SET NULL,
-    source_type         TEXT    NOT NULL CHECK (source_type IN ('dataset', 'historical_import', 'flow_import', 'live_capture', 'replay')),
+    source_type         TEXT    NOT NULL CHECK (source_type IN ('dataset', 'historical_import', 'flow_import', 'live_capture', 'replay', 'simulation')),
     interface_name      TEXT,
     started_at          TEXT    NOT NULL,
     ended_at            TEXT    CHECK (ended_at IS NULL OR ended_at >= started_at),

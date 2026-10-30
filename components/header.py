@@ -11,7 +11,7 @@ import streamlit as st
 
 from components import severity
 from components.ui import format_ratio, format_timestamp, source_badge
-from services import header_service, live_monitor_service, replay_service
+from services import header_service, live_monitor_service, replay_service, simulation_service
 from services.authorization import Principal
 
 REFRESH_SECONDS = 10
@@ -51,7 +51,8 @@ def _cell(label: str, value, title: str = "") -> str:
 def _strip_html(data: header_service.HeaderData) -> str:
     flows = None if data.flows_per_second is None else escape(f"{data.flows_per_second:,.1f}")
     flows_title = {"live": "Flows finished per second over the last minute (live packet capture).",
-                   "replay": "Dataset rows replayed per second of wall-clock time (DATASET REPLAY, not live traffic)."
+                   "replay": "Dataset rows replayed per second of wall-clock time (DATASET REPLAY, not live traffic).",
+                   "simulation": "Representative simulated flows per second (SIMULATION, not traffic)."
                    }.get(data.flows_basis, "Needs live packet capture or a running replay.")
     incidents = escape(str(data.active_incidents))
     if data.top_incident_severity:
@@ -97,9 +98,12 @@ def _toast_new_incidents(data: header_service.HeaderData) -> None:
 def render_header(principal: Principal) -> None:
     status = live_monitor_service.get_monitor().status
     replay = replay_service.status_copy()
+    simulation = simulation_service.status_copy()
     data = header_service.get_header(principal, live_running=status.running, live_mode=status.mode,
                                      live_session_id=status.session_id, replay_running=replay.running,
-                                     replay_flows_per_second=replay.rows_per_second)
+                                     replay_flows_per_second=replay.rows_per_second,
+                                     simulation_running=simulation.running,
+                                     simulation_flows_per_second=simulation.flows_per_second)
     if data.source.kind == "replay":
         if replay.running:
             state = "paused" if replay.paused else f"playing at {replay.speed}×"
@@ -109,5 +113,10 @@ def render_header(principal: Principal) -> None:
             detail = "the latest data shown comes from a finished replay"
         st.markdown(f"<div class='ss-banner-replay'>▶ DATASET REPLAY · {detail}. Recorded, labelled data; nothing on "
                     "screen is live traffic.</div>", unsafe_allow_html=True)
+    if data.source.kind == "simulation":
+        detail = (f"'{escape(simulation.scenario_title or '')}' running · {escape(simulation_service.elapsed_note(simulation))}"
+                  if simulation.running else "the latest data shown comes from a finished simulation")
+        st.markdown(f"<div class='ss-banner-simulation'>◆ SIMULATION · {detail} Synthetic traffic created in memory; no "
+                    "packets exist and nothing on screen is a measurement.</div>", unsafe_allow_html=True)
     st.markdown(_strip_html(data), unsafe_allow_html=True)
     _toast_new_incidents(data)

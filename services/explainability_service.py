@@ -277,7 +277,7 @@ def explain_alert(principal: Principal, alert_id: int) -> Explanation:
         source = _dataset(conn, alert.session_id)
         flows = _member_flows(conn, alert) if alert.session_id is not None else pd.DataFrame()
         reference_flows = None
-        if source and source["source_type"] == "live_capture":
+        if source and source["source_type"] in ("live_capture", "simulation"):
             reference_flows = conn.execute(
                 "SELECT feature_summary_json FROM network_flows WHERE session_id = ? AND intrusion_prediction IS NULL "
                 "ORDER BY id DESC LIMIT ?", (alert.session_id, REFERENCE_ROWS)).fetchall()

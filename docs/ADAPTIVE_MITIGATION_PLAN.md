@@ -1,6 +1,6 @@
 # Adaptive Bandwidth Allocation & Automated Threat Mitigation: review and plan
 
-Status: **approved 2026-10-30; M1 done, M2 next.** Decisions are recorded in section 6.
+Status: **approved 2026-10-30; M1 and M2 done, M3 next.** Decisions are recorded in section 6.
 
 ## 1. The project today
 
@@ -105,3 +105,14 @@ app.py (st.navigation router; signed out = login page only)
   - Not verified with real packets: this Mac has no capture permission. The worker path is tested with a fake sniffer
     and a real Scapy packet parsed in memory.
   - Capacity stays configured-or-unavailable: macOS reports link speed 0, and link speed is not available bandwidth.
+- **M2 (simulation mode), done.** `services/simulation_service.py`, `views/simulation.py`, migration `011` (`simulation`
+  source type, `incidents.is_simulation`).
+  - Packet records are created in memory and go through the real `FlowTable` and the registered models; no verdict is
+    scripted. Only a live-compatible classifier can be used (features are never zero-filled).
+  - Bandwidth comes from a simple link model (equal cut when offered exceeds capacity), stored as `derived` and shown as
+    *Simulated*. Stored flows are a representative sample. Latency is not modelled, so it stays unavailable.
+  - Verified with models trained on the bundled synthetic sample: normal traffic 0 flagged, flood named DDoS, scan named
+    PortScan, hog flagged by the anomaly detector. Those verdicts depend on the model and were shaped against that
+    sample's benign range (the file-transfer pattern was adjusted once), so they say nothing about real-network accuracy.
+  - Correlation now takes an `origin`, so a replay or simulation only ever groups its own alerts (this also fixed replay
+    linking real alerts as a side effect).

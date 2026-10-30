@@ -5,17 +5,24 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 
 
-# Replay data lives in sessions with source_type 'replay'. Correlation keeps it apart from real data.
+# Replay and simulation data live in sessions with their own source_type. Correlation keeps each apart from real data
+# and from the other. An "origin" is 'real', 'replay' or 'simulation'.
 REPLAY_SOURCE_NAME = "dataset replay"
+SIMULATION_SOURCE_NAME = "simulation"
 IS_REPLAY_ALERT = ("EXISTS (SELECT 1 FROM monitoring_sessions s WHERE s.id = a.session_id "
                    "AND s.source_type = 'replay')")
-_IS_REPLAY_METRIC = ("COALESCE(session_id IN (SELECT id FROM monitoring_sessions WHERE source_type = 'replay'), 0)")
+IS_SIMULATION_ALERT = ("EXISTS (SELECT 1 FROM monitoring_sessions s WHERE s.id = a.session_id "
+                       "AND s.source_type = 'simulation')")
+_METRIC_ORIGIN = ("CASE WHEN session_id IN (SELECT id FROM monitoring_sessions WHERE source_type = 'replay') THEN 'replay' "
+                  "WHEN session_id IN (SELECT id FROM monitoring_sessions WHERE source_type = 'simulation') "
+                  "THEN 'simulation' ELSE 'real' END")
+_PREDICTION_ORIGIN = ("CASE source_name WHEN ? THEN 'replay' WHEN ? THEN 'simulation' ELSE 'real' END")
 
 
 def unlinked_alerts(conn: sqlite3.Connection, statuses: tuple = ("open", "acknowledged")) -> List[sqlite3.Row]:
     placeholders = ", ".join("?" for _ in statuses)
     return conn.execute(
-        f"SELECT a.*, {IS_REPLAY_ALERT} AS is_replay FROM alerts a WHERE a.status IN ({placeholders}) "
+        f"SELECT a.*, {IS_REPLAY_ALERT} AS is_replay, {IS_SIMULATION_ALERT} AS is_simulation FROM alerts a WHERE a.status IN ({placeholders}) "
         "AND a.suppressed_by_rule IS NULL "
         "AND NOT EXISTS (SELECT 1 FROM incident_alerts ia WHERE ia.alert_id = a.id) ORDER BY a.created_at, a.id",
         statuses,
@@ -31,9 +38,10 @@ def active_incidents(conn: sqlite3.Connection) -> List[sqlite3.Row]:
 def insert(conn: sqlite3.Connection, values: Dict[str, Any]) -> int:
     columns = ("title", "classification", "status", "window_start", "window_end", "measured_changes_json",
                "model_outputs_json", "correlation_rationale", "investigation_steps_json", "created_by",
-               "created_at", "updated_at", "is_replay")
+               "created_at", "updated_at", "is_replay", "is_simulation")
     cursor = conn.execute(f"INSERT INTO incidents ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
-                          tuple(int(bool(values.get(c))) if c == "is_replay" else values.get(c) for c in columns))
+                          tuple(int(bool(values.get(c))) if c in ("is_replay", "is_simulation") else values.get(c)
+                                for c in columns))
     return int(cursor.lastrowid)
 
 
@@ -58,7 +66,7 @@ def get(conn: sqlite3.Connection, incident_id: int) -> Optional[sqlite3.Row]:
 
 def alerts_for(conn: sqlite3.Connection, incident_id: int) -> List[sqlite3.Row]:
     return conn.execute(
-        f"SELECT a.*, {IS_REPLAY_ALERT} AS is_replay FROM alerts a JOIN incident_alerts ia ON ia.alert_id = a.id "
+        f"SELECT a.*, {IS_REPLAY_ALERT} AS is_replay, {IS_SIMULATION_ALERT} AS is_simulation FROM alerts a JOIN incident_alerts ia ON ia.alert_id = a.id "
         "WHERE ia.incident_id = ? "
         "ORDER BY a.created_at, a.id", (incident_id,)).fetchall()
 
@@ -79,20 +87,20 @@ def list_incidents(conn: sqlite3.Connection, statuses: Optional[List[str]] = Non
 
 
 def metrics_between(conn: sqlite3.Connection, start: str, end: str, end_inclusive: bool = True,
-                    replay: bool = False) -> List[sqlite3.Row]:
+                    origin: str = "real") -> List[sqlite3.Row]:
     end_op = "<=" if end_inclusive else "<"
     return conn.execute(
         "SELECT timestamp, interface_name, throughput_bps, utilization_ratio, latency_ms, packet_loss_ratio, "
         f"provenance, throughput_provenance FROM network_metrics WHERE timestamp >= ? AND timestamp {end_op} ? "
-        f"AND {_IS_REPLAY_METRIC} = ? ORDER BY timestamp", (start, end, int(replay))).fetchall()
+        f"AND {_METRIC_ORIGIN} = ? ORDER BY timestamp", (start, end, origin)).fetchall()
 
 
-def predictions_between(conn: sqlite3.Connection, start: str, end: str, replay: bool = False) -> List[sqlite3.Row]:
+def predictions_between(conn: sqlite3.Connection, start: str, end: str, origin: str = "real") -> List[sqlite3.Row]:
     return conn.execute(
         "SELECT id, timestamp, interface_name, forecast_horizon_seconds, predicted_utilization_ratio, "
         "predicted_throughput_bps, congestion_risk, model_version FROM congestion_predictions "
-        "WHERE timestamp >= ? AND timestamp <= ? AND (source_name = ?) = ? ORDER BY timestamp",
-        (start, end, REPLAY_SOURCE_NAME, int(replay))).fetchall()
+        f"WHERE timestamp >= ? AND timestamp <= ? AND {_PREDICTION_ORIGIN} = ? ORDER BY timestamp",
+        (start, end, REPLAY_SOURCE_NAME, SIMULATION_SOURCE_NAME, origin)).fetchall()
 
 
 def latest_recommendation_for(conn: sqlite3.Connection, interface: Optional[str]) -> Optional[sqlite3.Row]:

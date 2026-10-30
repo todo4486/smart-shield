@@ -40,6 +40,13 @@ class HostMeter:
         self._recv_bytes[dst] += length
         self._recv_packets[dst] += 1
 
+    def add_bulk(self, src: str, dst: str, length: int, packets: int) -> None:
+        """Totals for many packets at once (simulation mode, where packets are not enumerated)."""
+        self._sent_bytes[src] += length
+        self._sent_packets[src] += packets
+        self._recv_bytes[dst] += length
+        self._recv_packets[dst] += packets
+
     def sample(self, seconds: float, connections: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
         """Rates for the interval just ended, busiest hosts first; resets the counters."""
         if seconds <= 0:

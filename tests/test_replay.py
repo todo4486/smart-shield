@@ -252,3 +252,13 @@ def test_replay_stops_when_its_session_is_closed_elsewhere(analyst, trained, eng
     monitoring_service.recover_interrupted_sessions("replay")  # e.g. a second engine after a code reload
     assert engine.step(60) is False and not engine.status.running
     assert _count("SELECT COUNT(*) FROM network_flows WHERE session_id = ?", session_id) == 0
+
+
+def test_a_replay_only_correlates_its_own_alerts(analyst, trained, engine):
+    intrusion_inference_service.run_detection(analyst, DetectionOptions(dataset_id=trained))
+    engine.start(analyst, trained, "all", speed=30)
+    while engine.step(3600):
+        pass
+    assert _count("SELECT COUNT(*) FROM incidents WHERE is_replay = 0") == 0  # the real alerts wait for a person
+    assert _count("SELECT COUNT(*) FROM incidents WHERE id IN (%s) AND is_replay = 1"
+                  % ",".join(map(str, engine.status.incidents))) == len(engine.status.incidents) > 0

@@ -196,7 +196,8 @@ with incidents_tab:
             "Type": CLASS_STYLE.get(i["classification"], ("", i["classification"]))[1]
             + (" · Not an attack" if i["classification"] == "performance" else ""),
             "Title": i["title"], "Status": i["status"], "Assigned": i.get("assigned_email") or "—",
-            "Source": "DATASET REPLAY" if i.get("is_replay") else "Captured / imported",
+            "Source": "DATASET REPLAY" if i.get("is_replay") else "SIMULATION" if i.get("is_simulation")
+            else "Captured / imported",
             "Alerts": i["alert_count"], "Window start": format_timestamp(i["window_start"]),
         } for i in incidents]), hide_index=True)
         ids = list(by_id)
@@ -213,6 +214,8 @@ with incidents_tab:
             badges += " <span class='ss-src ss-src-counters'>NOT AN ATTACK</span>"
         if incident.is_replay:
             badges += " <span class='ss-src ss-src-replay'>DATASET REPLAY</span>"
+        if incident.is_simulation:
+            badges += " <span class='ss-src ss-src-simulation'>SIMULATION</span>"
         attack_labels = [a.category for a in incident.alerts if a.alert_type == "security"]
         techniques = mitre.incident_badges(attack_labels)
         st.markdown(
