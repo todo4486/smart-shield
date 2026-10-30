@@ -14,6 +14,10 @@ How the link is modelled (deterministic for a given seed)
 * Each traffic source offers a rate. If total offered traffic exceeds the configured capacity, every source is cut by
   the same share (tail drop on a full queue), so an attack really does squeeze legitimate traffic. The dropped share is
   reported as the packet-loss ratio of this model. Latency is not modelled, so it stays unavailable.
+* Mitigations act where a controller on this side of the link can act. Outbound traffic is limited before it enters
+  the link, which frees capacity. Inbound traffic has already crossed the link when it reaches the controller: a limit
+  stops it reaching the internal host, but it still fills the link. So a flood from outside can be contained locally,
+  yet legitimate traffic only recovers once it is filtered upstream, and the recovery check says so.
 * Sending every packet of a 100 Mbit/s link through Python would be too slow, so each source contributes its exact byte
   and packet totals to the per-host meter, plus a few REPRESENTATIVE flows per second to the flow extractor and models.
   Stored flows are therefore a sample, which the session configuration and the UI say.
@@ -35,12 +39,13 @@ from repositories import telemetry_repository
 from repositories.incident_repository import SIMULATION_SOURCE_NAME
 from services import (
     alert_service, audit_service, database_service, incident_correlation_service, intrusion_inference_service,
-    model_registry_service, monitoring_service,
+    mitigation_service, model_registry_service, monitoring_service,
 )
 from services.authorization import Permission, Principal, require_permission
 from services.flow_extractor import FlowTable
 from services.host_telemetry import HostMeter, connections_by_host
 from services.intrusion_features import LIVE_FLOW_FEATURES
+from services.mitigation_service import LinkPolicy, SenderDemand
 from services.model_registry_service import ModelRecord
 from services.monitoring_service import SessionState, SourceType
 
@@ -144,10 +149,42 @@ def delivered_share(offered: Sequence[float], capacity_bps: float) -> float:
     return 1.0 if total <= capacity_bps or total <= 0 else capacity_bps / total
 
 
-def link_rates(sources: Sequence[TrafficSource], share: float) -> Dict[str, float]:
-    """Delivered link totals from the internal network's point of view (pure)."""
-    incoming = sum(s.offered_bps * share for s in sources if s.inbound)
-    outgoing = sum(s.offered_bps * share for s in sources if not s.inbound)
+def allowed_rates(sources: Sequence[TrafficSource], policy: Optional[LinkPolicy]) -> List[float]:
+    """What the controller lets through for each source, before the link is considered (pure)."""
+    if policy is None:
+        return [s.offered_bps for s in sources]
+    towards: Dict[str, float] = defaultdict(float)
+    for s in sources:
+        towards[s.receiver] += s.offered_bps
+    allowed = []
+    for s in sources:
+        rate = s.offered_bps
+        if s.sender in policy.blocked or s.sender in policy.isolated or s.receiver in policy.isolated:
+            rate = 0.0
+        if s.sender in policy.source_limits:
+            rate = min(rate, policy.source_limits[s.sender])
+        if s.receiver in policy.destination_limits:
+            rate = min(rate, policy.destination_limits[s.receiver] * s.offered_bps / towards[s.receiver])
+        if not s.inbound and s.sender in policy.sender_caps:
+            rate = min(rate, policy.sender_caps[s.sender])
+        allowed.append(rate)
+    return allowed
+
+
+def link_model(sources: Sequence[TrafficSource], capacity_bps: float, policy: Optional[LinkPolicy] = None) -> Dict[str, Any]:
+    """Per-source rates on the link and after the controller (pure). See the module docstring for the reasoning."""
+    allowed = allowed_rates(sources, policy)
+    entering = [s.offered_bps if s.inbound else rate for s, rate in zip(sources, allowed)]
+    share = delivered_share(entering, capacity_bps)
+    on_link = [rate * share for rate in entering]
+    delivered = [min(carried, rate) if s.inbound else carried for s, carried, rate in zip(sources, on_link, allowed)]
+    return {"allowed": allowed, "on_link": on_link, "delivered": delivered, "share": share}
+
+
+def link_rates(sources: Sequence[TrafficSource], on_link: Sequence[float]) -> Dict[str, float]:
+    """Link totals from the internal network's point of view (pure)."""
+    incoming = sum(rate for s, rate in zip(sources, on_link) if s.inbound)
+    outgoing = sum(rate for s, rate in zip(sources, on_link) if not s.inbound)
     return {"incoming_bps": incoming, "outgoing_bps": outgoing, "throughput_bps": incoming + outgoing}
 
 
@@ -198,29 +235,31 @@ class TrafficGenerator:
     def attack_active(self) -> bool:
         return bool(self.attack) and self.elapsed >= self.attack_delay
 
-    def tick(self, now: float, seconds: float = TICK_SECONDS) -> Dict[str, Any]:
+    def tick(self, now: float, seconds: float = TICK_SECONDS, policy: Optional[LinkPolicy] = None) -> Dict[str, Any]:
         sources = self.active_sources()
-        offered = [s.offered_bps for s in sources]
-        share = delivered_share(offered, self.capacity_bps)
+        model = link_model(sources, self.capacity_bps, policy)
         packets: List[tuple] = []
-        for source in sources:
-            count = source.flows_per_second * seconds
+        for source, allowed in zip(sources, model["allowed"]):
+            # A limited source gets fewer flows past the controller; the models only see what passes it.
+            count = source.flows_per_second * seconds * (allowed / source.offered_bps if source.offered_bps else 0.0)
             for _ in range(int(count) + (self.rng.random() < count - int(count))):
                 start = now + self.rng.uniform(0, max(seconds * 0.5, 0.001))
                 port = self.rng.randint(1, 1024) if source.random_port else source.port
                 packets.extend(attacker_flow_packets(source, start, self.rng.randint(30000, 60000), port))
         self.elapsed += seconds
         packets.sort(key=lambda p: p[0])
-        return {"sources": sources, "share": share, "offered_bps": sum(offered), "packets": packets,
-                **link_rates(sources, share)}
+        return {"sources": sources, "share": model["share"], "delivered": model["delivered"],
+                "offered_bps": sum(s.offered_bps for s in sources), "packets": packets,
+                **link_rates(sources, model["on_link"])}
 
 
-def meter_totals(meter: HostMeter, sources: Sequence[TrafficSource], share: float, seconds: float) -> None:
+def meter_totals(meter: HostMeter, sources: Sequence[TrafficSource], delivered: Sequence[float], seconds: float) -> None:
     """Add each source's delivered bytes and packets to the meter, without enumerating the packets."""
-    for s in sources:
-        delivered_bytes = s.offered_bps * share * seconds / 8
+    for s, rate in zip(sources, delivered):
+        delivered_bytes = rate * seconds / 8
         size = max(s.shape.forward_size, s.shape.backward_size) + 40  # plus IP and TCP/UDP headers
-        meter.add_bulk(s.sender, s.receiver, int(delivered_bytes), int(delivered_bytes / size))
+        if delivered_bytes > 0:
+            meter.add_bulk(s.sender, s.receiver, int(delivered_bytes), int(delivered_bytes / size))
 
 
 # ------------------------------------------------------------------ engine
@@ -381,16 +420,26 @@ class SimulationEngine:
             if not self._session_still_running():
                 self.status.running = False
                 self.status.last_error = "This simulation's session was closed outside the engine."
+                mitigation_service.end_session(self.status.session_id, "The simulation's session was closed.")
                 return False
-        tick = self._generator.tick(now, seconds)
+        moment = datetime.fromtimestamp(now, tz=timezone.utc)
+        session_id, capacity = self.status.session_id, self.status.capacity_bps
+        sources = self._generator.active_sources()
+        plan = mitigation_service.plan_interval(session_id, capacity, [
+            SenderDemand(s.sender, s.receiver, "critical" if s.traffic_class == "critical" else "normal", s.offered_bps)
+            for s in sources], moment)
+        tick = self._generator.tick(now, seconds, plan.policy)
         finished = []
         for packet in tick["packets"]:
             finished.extend(self._table.add(packet))
         finished.extend(self._table.expire(now + seconds))
-        meter_totals(self._meter, tick["sources"], tick["share"], seconds)
+        meter_totals(self._meter, tick["sources"], tick["delivered"], seconds)
         hosts = self._meter.sample(seconds, connections_by_host(self._table.active))
         verdicts = self._score(finished)
         created = self._store(now, seconds, tick, hosts, finished, verdicts)
+        mitigation_service.record_interval(
+            session_id, plan, hosts, {s.sender for s in sources if s.traffic_class == "critical"},
+            datetime.fromtimestamp(now + seconds, tz=timezone.utc))
         with self._lock:
             status = self.status
             status.elapsed_seconds = self._generator.elapsed
@@ -539,6 +588,7 @@ class SimulationEngine:
         """Close the session. Caller holds the lock."""
         self.status.running = False
         try:
+            mitigation_service.end_session(self.status.session_id, "The simulation ended.")
             with database_service.session(write=True) as conn:
                 monitoring_service.transition(conn, self.status.session_id, SessionState.STOPPING)
                 monitoring_service.transition(conn, self.status.session_id, state, message)
@@ -564,6 +614,7 @@ def _counts(conn) -> Dict[str, int]:
         "host_samples": one(f"SELECT COUNT(*) FROM host_metrics WHERE session_id IN ({sessions})"),
         "alerts": one(f"SELECT COUNT(*) FROM alerts WHERE session_id IN ({sessions})"),
         "incidents": one("SELECT COUNT(*) FROM incidents WHERE is_simulation = 1"),
+        "mitigations": mitigation_service.data_count(conn),
     }
 
 
@@ -575,6 +626,7 @@ def clear_simulation_data(principal: Principal) -> Dict[str, int]:
         engine.stop(None, "Stopped to clear simulation data")
     with database_service.session(write=True) as conn:
         counts = _counts(conn)
+        mitigation_service.clear_simulation(conn)
         conn.execute("DELETE FROM incidents WHERE is_simulation = 1")
         conn.execute("DELETE FROM alerts WHERE session_id IN (SELECT id FROM monitoring_sessions "
                      "WHERE source_type = 'simulation')")

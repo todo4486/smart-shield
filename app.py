@@ -14,7 +14,7 @@ from components.sidebar import render_logo, render_sidebar
 from components.header import render_header
 from components.theme import inject_css, register_plotly_template
 from config import get_settings
-from services import database_service, monitoring_service, preferences_service, session_service
+from services import database_service, mitigation_service, monitoring_service, preferences_service, session_service
 from services.authorization import Permission
 
 st.set_page_config(
@@ -33,6 +33,7 @@ def _prepare_database(db_path: str) -> str:
     monitoring_service.recover_interrupted_sessions("live_capture")
     monitoring_service.recover_interrupted_sessions("replay")
     monitoring_service.recover_interrupted_sessions("simulation")
+    mitigation_service.close_orphans()
     return db_path
 
 

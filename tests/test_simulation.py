@@ -66,10 +66,10 @@ def test_full_link_cuts_every_source_equally():
 def test_link_rates_follow_direction():
     sources = sim.baseline_sources(100 * M)
     assert all(s.inbound for s in sources)
-    rates = sim.link_rates(sources, 1.0)
+    rates = sim.link_rates(sources, [x.offered_bps for x in sources])
     assert rates["incoming_bps"] == pytest.approx(40 * M) and rates["outgoing_bps"] == 0
     hog = sim.attack_sources("bandwidth_hog", 100 * M)
-    assert sim.link_rates(hog, 0.5)["outgoing_bps"] == pytest.approx(37.5 * M)
+    assert sim.link_rates(hog, [x.offered_bps * 0.5 for x in hog])["outgoing_bps"] == pytest.approx(37.5 * M)
 
 
 def test_scenarios_use_documentation_addresses_for_outside_hosts():
@@ -118,7 +118,7 @@ def test_attack_flows_are_opened_by_the_outside_host():
 def test_meter_totals_are_exact_and_respect_the_cut():
     meter = HostMeter()
     source = sim.baseline_sources(100 * M)[0]
-    sim.meter_totals(meter, [source], 0.5, 1.0)
+    sim.meter_totals(meter, [source], [source.offered_bps * 0.5], 1.0)
     rows = {r["host"]: r for r in meter.sample(1.0)}
     assert rows[source.client]["received_bps"] == pytest.approx(source.offered_bps * 0.5, rel=1e-6)
     assert rows[source.server]["sent_bps"] == pytest.approx(source.offered_bps * 0.5, rel=1e-6)
@@ -279,7 +279,7 @@ def test_migration_keeps_older_sessions(tmp_path):
     conn.execute("INSERT INTO host_metrics (session_id, timestamp, host, sent_bps, received_bps, sent_pps, received_pps, "
                  "active_connections) VALUES (1, '2026-01-01T00:00:00+00:00', 'a', 1, 1, 1, 1, 1)")
     conn.close()
-    assert database_service.run_migrations(db) == ["011"]
+    assert database_service.run_migrations(db)[0] == "011"
     conn = database_service.connect(db)
     assert conn.execute("SELECT COUNT(*) FROM host_metrics").fetchone()[0] == 1
     conn.execute("INSERT INTO monitoring_sessions (source_type, started_at, status) VALUES "

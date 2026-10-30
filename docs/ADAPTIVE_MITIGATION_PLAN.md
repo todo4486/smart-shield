@@ -1,6 +1,6 @@
 # Adaptive Bandwidth Allocation & Automated Threat Mitigation: review and plan
 
-Status: **approved 2026-10-30; M1 and M2 done, M3 next.** Decisions are recorded in section 6.
+Status: **approved 2026-10-30; M1, M2 and M3 done, M4 next.** Decisions are recorded in section 6.
 
 ## 1. The project today
 
@@ -116,3 +116,20 @@ app.py (st.navigation router; signed out = login page only)
     sample's benign range (the file-transfer pattern was adjusted once), so they say nothing about real-network accuracy.
   - Correlation now takes an `origin`, so a replay or simulation only ever groups its own alerts (this also fixed replay
     linking real alerts as a side effect).
+- **M3 (allocation + mitigation engine), done.** `services/host_allocation.py`, `services/mitigation_scoring.py`,
+  `services/mitigation_service.py`, `repositories/mitigation_repository.py`, `components/mitigation_panel.py`, migration
+  `012` (`mitigation_actions`, `allocation_snapshots`), `MitigationSettings`.
+  - Allocation is two levels of the existing `allocate()`: classes (critical, normal, suspicious, restricted), then hosts
+    within a class. An unused guarantee is lent to other classes, unlike a stored policy plan.
+  - Only flows flagged by the models start an assessment; a congested link alone never does (tested). Confidence, severity,
+    repetition and false-positive risk are kept separately, and the risk figure is a documented heuristic, not a probability.
+  - Auto rate-limit applies rate limits only. Blocking and isolation always need an administrator, a reason, an expiry and
+    the target typed out (tested, including the engine trying to apply a block).
+  - The simulated link is direction-aware: limiting outgoing traffic frees the link; limiting a flood from outside only
+    stops it reaching the host. So the flood scenario ends in `partial` recovery with an upstream note, which is the honest
+    result. `Recovered` is only reported from stored samples after the action.
+  - Enforcement in this phase is the simulated link only. A real session's action is recorded as failed with the reason,
+    and nothing evaluates live capture yet: both are M4. New incident statuses (Mitigation pending, etc.) are M5; for now
+    actions link to the incident and add notes to it.
+  - Verified in real time on a copy of the real database with the live-compatible model (see the M3 report); that says
+    nothing about accuracy on a real network, since the model was trained on the synthetic sample.

@@ -271,3 +271,80 @@ def update_drift_settings(principal: Principal, new: DriftSettings) -> DriftSett
         audit_service.record(conn, user_id=principal.user_id, action="settings.update",
                              details={"key": DRIFT_KEY, "before": before, "after": asdict(validated)})
     return validated
+
+
+# ------------------------------------------------------------ mitigation
+
+MITIGATION_POLICIES = ("off", "recommend", "auto_rate_limit")
+
+
+@dataclass(frozen=True)
+class MitigationSettings:
+    """Off, Recommend (the default) or Auto rate-limit. Blocking and isolation always need an administrator."""
+
+    policy: str = "recommend"
+    min_confidence: float = 0.70
+    min_severity: str = "high"
+    min_repetition: int = 3
+    max_false_positive_risk: float = 0.60
+    rate_limit_share: float = 0.05  # the limit proposed for a suspicious target, as a share of the link
+    rate_limit_minutes: int = 15
+    block_minutes: int = 60
+    safety_margin: float = 0.05
+    critical_min_share: float = 0.20
+    normal_min_share: float = 0.30
+    suspicious_max_share: float = 0.10
+
+    def validate(self) -> "MitigationSettings":
+        if self.policy not in MITIGATION_POLICIES:
+            raise SettingsError("Choose Off, Recommend or Auto rate-limit.")
+        if not 0 <= float(self.min_confidence) <= 1:
+            raise SettingsError("Minimum confidence must be between 0 and 1.")
+        if self.min_severity not in ("low", "medium", "high", "critical"):
+            raise SettingsError("Choose a minimum severity.")
+        if not 1 <= int(self.min_repetition) <= 100:
+            raise SettingsError("Minimum repetition must be between 1 and 100 windows.")
+        if not 0 <= float(self.max_false_positive_risk) <= 1:
+            raise SettingsError("Maximum false-positive risk must be between 0 and 1.")
+        if not 0.001 <= float(self.rate_limit_share) <= 0.5:
+            raise SettingsError("The rate limit must be between 0.1% and 50% of the link.")
+        for name, minutes in (("Rate-limit", self.rate_limit_minutes), ("Block", self.block_minutes)):
+            if not 1 <= int(minutes) <= 1440:
+                raise SettingsError(f"{name} duration must be between 1 and 1440 minutes.")
+        for name, share in (("Critical minimum", self.critical_min_share), ("Normal minimum", self.normal_min_share),
+                            ("Suspicious maximum", self.suspicious_max_share)):
+            if not 0 <= float(share) <= 1:
+                raise SettingsError(f"{name} must be between 0% and 100%.")
+        if not 0 <= float(self.safety_margin) < 0.9:
+            raise SettingsError("Safety margin must be between 0% and 90%.")
+        if float(self.critical_min_share) + float(self.normal_min_share) > 1 - float(self.safety_margin) + 1e-9:
+            raise SettingsError("The guaranteed minimums exceed the usable capacity after the safety margin.")
+        return self
+
+
+MITIGATION_KEY = "mitigation.settings"
+
+
+def get_mitigation_settings() -> MitigationSettings:
+    with database_service.session() as conn:
+        row = conn.execute("SELECT value_json FROM app_settings WHERE key = ?", (MITIGATION_KEY,)).fetchone()
+    if row is None:
+        return MitigationSettings()
+    stored = json.loads(row["value_json"])
+    return MitigationSettings(**{k: v for k, v in stored.items() if k in MitigationSettings.__dataclass_fields__}).validate()
+
+
+def update_mitigation_settings(principal: Principal, new: MitigationSettings) -> MitigationSettings:
+    require_permission(principal, Permission.MANAGE_SETTINGS, action="settings.update", details={"key": MITIGATION_KEY})
+    validated = new.validate()
+    before = asdict(get_mitigation_settings())
+    with database_service.session(write=True) as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value_json, updated_at, updated_by) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at, "
+            "updated_by = excluded.updated_by",
+            (MITIGATION_KEY, json.dumps(asdict(validated), sort_keys=True), utc_now_iso(), principal.user_id),
+        )
+        audit_service.record(conn, user_id=principal.user_id, action="settings.update",
+                             details={"key": MITIGATION_KEY, "before": before, "after": asdict(validated)})
+    return validated

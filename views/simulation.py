@@ -5,6 +5,7 @@ from html import escape
 
 import streamlit as st
 
+from components import mitigation_panel
 from components.guard import require_principal
 from components.ui import format_bits_rate, format_ratio, kpi_tile, page_header, section_label, source_badge
 from services import data_source, simulation_service
@@ -69,6 +70,19 @@ if status.running and can_run:
     l2.page_link("views/network_map.py", label="Watch the Network Map", icon=":material/hub:")
     l3.page_link("views/incident_center.py", label="Watch the Incident Center", icon=":material/crisis_alert:")
 
+
+
+@st.fragment(run_every=2 if engine.status.running else None)
+def render_mitigation() -> None:
+    session_id = simulation_service.status_copy().session_id
+    if session_id is not None:
+        mitigation_panel.render_session(principal, session_id)
+
+
+section_label("Threat mitigation")
+mitigation_panel.render_policy(principal)
+render_mitigation()
+
 section_label("Start a simulation")
 if not can_run:
     st.info("Your role cannot start simulations.")
@@ -124,6 +138,9 @@ with st.expander("What is real and what is simulated"):
     st.markdown(f"""
 - **Simulated:** the hosts (documentation address ranges), the traffic volumes and the link. Rates are calculated by a
   simple model and labelled *Simulated*. If traffic exceeds the capacity, every source is cut by the same share.
+- **Mitigation:** decisions, records and audit entries are real, but enforcement here is the link model reading the active
+  limits, so its effect is simulated. Nothing touches a real network adapter. A limit on outgoing traffic frees the link;
+  a limit on a flood from outside only stops it reaching the host, because it has already filled the link.
 - **Real:** the flow extractor, the features, and the verdicts of your registered, hash-verified models. No verdict is
   scripted, so a scenario can be missed or misnamed by the model, and that is shown as it is.
 - **Sampling:** each source contributes exact bandwidth totals, but only a few representative flows per second go through
