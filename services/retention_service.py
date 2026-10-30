@@ -23,6 +23,7 @@ RULES = {
     # name: (settings field, SQL with ? = cutoff)
     "network_metrics": ("metrics_days", "DELETE FROM network_metrics WHERE timestamp < ?"),
     "network_flows": ("flows_days", "DELETE FROM network_flows WHERE timestamp < ?"),
+    "host_metrics": ("metrics_days", "DELETE FROM host_metrics WHERE timestamp < ?"),
     "congestion_predictions": ("predictions_days", "DELETE FROM congestion_predictions WHERE timestamp < ?"),
     "closed_alerts": ("closed_alerts_days",
                       "DELETE FROM alerts WHERE status IN ('resolved', 'false_positive') AND created_at < ? "

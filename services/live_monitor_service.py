@@ -390,6 +390,9 @@ class LiveMonitor:
                 "derived" if s["utilization_ratio"] is not None else "unavailable",
                 "configured" if s["configured_capacity_bps"] else "unavailable",
             ))
+        host_rows = [(session_id, m["at"], str(h["host"])[:64], h["sent_bps"], h["received_bps"], h["sent_pps"],
+                      h["received_pps"], h["active_connections"], "measured")
+                     for m in metrics for h in (m.get("hosts") or [])]
         room = max(0, self._max_flows - self.status.flows_stored)
         stored, skipped = flows[:room], flows[room:]
         verdicts = self._score(stored)
@@ -409,6 +412,8 @@ class LiveMonitor:
         with database_service.session(write=True) as conn:
             if rows:
                 telemetry_repository.insert_many(conn, rows)
+            if host_rows:
+                telemetry_repository.insert_host_metrics(conn, host_rows)
             if flow_rows:
                 conn.executemany(
                     "INSERT INTO network_flows (session_id, timestamp, src_ip, dst_ip, src_port, dst_port, protocol, "

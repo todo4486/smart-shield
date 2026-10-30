@@ -15,10 +15,17 @@ Re-read the relevant SPEC sections at the start of every phase.
    Never substitute 0 for a missing measurement.
 3. If link capacity is unknown, show absolute rates and say utilization is unavailable. Never invent a percentage.
 4. Congestion does not mean attack. The correlation engine must never conclude that on its own.
-5. Monitoring is passive only. No packet injection, scanning, attack generation, or automatic blocking.
-6. Never use `shell=True`. Never let the dashboard run arbitrary commands. Traffic shaping goes through an
-   allow-listed backend (fixed operations, validated arguments, `subprocess.run([...])` with list args).
-   It is off by default, admin-only, requires explicit confirmation, is audited, and is reversible.
+5. Monitoring is passive only. No packet injection, scanning, or attack generation on any network. Simulation
+   mode creates traffic *records in memory*, never packets.
+   Mitigation has three admin-chosen policy levels: **Off**, **Recommend** (default: every action needs admin
+   approval), and **Auto rate-limit** (the engine may apply only reversible, expiring rate limits, and only when
+   confidence, severity and repetition thresholds are all met). IP blocking and host isolation are never automatic:
+   they always need an administrator's approval, a reason and an expiry.
+6. Never use `shell=True`. Never let the dashboard run arbitrary commands. Traffic shaping and mitigation go through
+   allow-listed adapters (Linux `tc`, macOS `pf` + `dnctl`, or dry-run): fixed operations, validated arguments,
+   `subprocess.run([...])` with list args. Enforcement is off by default, admin-controlled, audited, expiring where
+   applicable, and reversible with one-click rollback. Manual actions require explicit confirmation; automatic
+   actions are allowed only under the Auto rate-limit policy in rule 5.
 7. Work in phases. Each phase must leave the app runnable with all tests passing. Stop and report at the end of a phase.
 
 ## Architecture

@@ -143,7 +143,7 @@ class FlowTable:
         return (proto,) + ((a, b) if (str(a) <= str(b)) else (b, a))
 
     def add(self, packet: Packet) -> List[Dict[str, object]]:
-        ts, src, dst, sport, dport, proto, length, flags = packet
+        ts, src, dst, sport, dport, proto, length, flags = packet[:8]  # a 9th field (wire length) may follow
         # A full sweep is O(active flows), so it runs at most once per EXPIRY_SWEEP_S of packet time.
         finished = self.expire(ts) if ts >= self._next_sweep else []
         key = self._key(src, dst, sport, dport, proto)

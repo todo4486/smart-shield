@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from services.flow_extractor import FlowTable
+from services.host_telemetry import HostMeter, connections_by_host
 from services.interface_counters import probe_latency_ms, rates, read_snapshot, validate_latency_target
 
 FLOW_BATCH = 500
@@ -34,7 +35,10 @@ def _iso(epoch: Optional[float] = None) -> str:
 
 
 def summarize_packet(packet) -> Optional[tuple]:
-    """Scapy packet -> (ts, src, dst, sport, dport, proto, payload_len, tcp_flags), or None for non-IP."""
+    """Scapy packet -> (ts, src, dst, sport, dport, proto, payload_len, tcp_flags, ip_len), or None for non-IP.
+
+    payload_len feeds the CIC-style flow features; ip_len (bytes on the wire at the IP layer) feeds per-host
+    bandwidth."""
     from scapy.layers.inet import IP, TCP, UDP
     from scapy.layers.inet6 import IPv6
 
@@ -58,7 +62,7 @@ def summarize_packet(packet) -> Optional[tuple]:
         length = len(layer.payload)
     else:
         length = len(ip.payload)
-    return (float(packet.time), str(ip.src), str(ip.dst), sport, dport, proto, int(length), flags)
+    return (float(packet.time), str(ip.src), str(ip.dst), sport, dport, proto, int(length), flags, len(ip))
 
 
 class PacketBuffer:
@@ -109,6 +113,7 @@ def run(config: Dict[str, Any], out, stop_event, sniffer_factory=None) -> None:
         latency = validate_latency_target(config.get("latency_target") or None)
         pending = PacketBuffer()
         table = FlowTable() if config["mode"] == "packets" else None
+        meter = HostMeter() if table is not None else None
         if table is not None:
             sniffer = (sniffer_factory or _scapy_sniffer)(interface, pending)
             sniffer.start()
@@ -124,7 +129,9 @@ def run(config: Dict[str, Any], out, stop_event, sniffer_factory=None) -> None:
             if table is not None:
                 finished = []
                 while pending:
-                    finished.extend(table.add(pending.popleft()))
+                    packet = pending.popleft()
+                    meter.add(packet)
+                    finished.extend(table.add(packet))
                 finished.extend(table.expire(time.time()))
                 for start in range(0, len(finished), FLOW_BATCH):
                     send.put({"type": "flows", "flows": finished[start:start + FLOW_BATCH]})
@@ -138,7 +145,10 @@ def run(config: Dict[str, Any], out, stop_event, sniffer_factory=None) -> None:
                 next_sample += interval
                 if sample is not None:
                     sample["latency_ms"] = probe_latency_ms(*latency) if latency else None
-                    send.put({"type": "metrics", "at": _iso(), "sample": sample, "dropped_messages": send.dropped,
+                    hosts = (meter.sample(sample["interval_seconds"], connections_by_host(table.active))
+                             if meter is not None else None)
+                    send.put({"type": "metrics", "at": _iso(), "sample": sample, "hosts": hosts,
+                              "dropped_messages": send.dropped,
                               "dropped_packets": pending.dropped, "pending_packets": len(pending), "active_flows": len(table.active) if table else None,
                               "flows_seen": flows_seen})
             stop_event.wait(0.2)

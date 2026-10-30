@@ -49,3 +49,37 @@ def interfaces_for_session(conn: sqlite3.Connection, session_id: int) -> List[st
             (session_id,),
         )
     ]
+
+
+# ---------------------------------------------------------------- per-host samples
+
+HOST_INSERT_COLUMNS = ("session_id", "timestamp", "host", "sent_bps", "received_bps", "sent_pps", "received_pps",
+                       "active_connections", "provenance")
+
+
+def insert_host_metrics(conn: sqlite3.Connection, rows: Iterable[Sequence]) -> None:
+    placeholders = ", ".join("?" for _ in HOST_INSERT_COLUMNS)
+    conn.executemany(f"INSERT INTO host_metrics ({', '.join(HOST_INSERT_COLUMNS)}) VALUES ({placeholders})", rows)
+
+
+def host_metrics_since(conn: sqlite3.Connection, session_id: int, since: str) -> List[sqlite3.Row]:
+    return conn.execute("SELECT * FROM host_metrics WHERE session_id = ? AND timestamp >= ? ORDER BY timestamp, id",
+                        (session_id, since)).fetchall()
+
+
+def newest_host_metric_time(conn: sqlite3.Connection, session_id: int) -> Optional[str]:
+    return conn.execute("SELECT MAX(timestamp) FROM host_metrics WHERE session_id = ?", (session_id,)).fetchone()[0]
+
+
+def latest_session_with_metrics(conn: sqlite3.Connection, source_types: Sequence[str]) -> Optional[sqlite3.Row]:
+    placeholders = ", ".join("?" for _ in source_types)
+    return conn.execute(
+        f"SELECT s.* FROM monitoring_sessions s WHERE s.source_type IN ({placeholders}) AND EXISTS "
+        "(SELECT 1 FROM network_metrics m WHERE m.session_id = s.id) ORDER BY s.id DESC LIMIT 1",
+        tuple(source_types)).fetchone()
+
+
+def flows_of_session_since(conn: sqlite3.Connection, session_id: int, since: str, limit: int = 20_000) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT src_ip, dst_ip, dst_port, protocol, byte_count, intrusion_prediction FROM network_flows "
+        "WHERE session_id = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?", (session_id, since, limit)).fetchall()

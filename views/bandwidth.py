@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from components import waterfill
+from components import live_network, waterfill
 from components.guard import require_principal
 from components.theme import COLORS, apply_chart_theme
 from components.ui import format_bits_rate, format_timestamp, kpi_tile, page_header, section_label
@@ -29,9 +29,12 @@ st.info("**Recommendation mode.** Changing numbers on this page does not change 
         "separate, optional, admin-only step that is off by default (see *Enforcement*).", icon=":material/info:")
 
 policies = bandwidth_service.list_policies(principal)
-policy_tab, recommend_tab, history_tab, enforce_tab = st.tabs(
-    ["Policies", "Recommend", "History", "Enforcement (advanced)"]
+live_tab, policy_tab, recommend_tab, history_tab, enforce_tab = st.tabs(
+    ["Live network", "Policies", "Recommend", "History", "Enforcement (advanced)"]
 )
+
+with live_tab:
+    live_network.render(principal)
 
 # ------------------------------------------------------------------ policies
 with policy_tab:
