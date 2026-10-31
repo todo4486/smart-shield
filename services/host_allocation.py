@@ -32,12 +32,21 @@ class AllocationPolicy:
     critical_min_share: float = 0.20
     normal_min_share: float = 0.30
     suspicious_max_share: float = 0.10
+    critical_max_share: float = 1.0
+    normal_max_share: float = 1.0
+    critical_weight: float = WEIGHTS[CRITICAL]
+    normal_weight: float = WEIGHTS[NORMAL]
 
     def validate(self) -> "AllocationPolicy":
         for name, value in (("Safety margin", self.safety_margin), ("Critical minimum", self.critical_min_share),
-                            ("Normal minimum", self.normal_min_share), ("Suspicious maximum", self.suspicious_max_share)):
+                            ("Normal minimum", self.normal_min_share), ("Suspicious maximum", self.suspicious_max_share),
+                            ("Critical maximum", self.critical_max_share), ("Normal maximum", self.normal_max_share)):
             if not 0 <= float(value) <= 1:
                 raise AllocationError(f"{name} must be between 0% and 100%.")
+        if self.critical_min_share > self.critical_max_share or self.normal_min_share > self.normal_max_share:
+            raise AllocationError("A class's minimum cannot be above its maximum.")
+        if self.critical_weight <= 0 or self.normal_weight <= 0:
+            raise AllocationError("Priorities must be positive.")
         if self.safety_margin >= 0.9:
             raise AllocationError("Safety margin must be below 90%.")
         if self.critical_min_share + self.normal_min_share > 1 - self.safety_margin + 1e-9:
@@ -112,10 +121,11 @@ def allocate_hosts(capacity_bps: float, policy: AllocationPolicy, demands: Seque
 
     guaranteed = {CRITICAL: capacity_bps * policy.critical_min_share, NORMAL: capacity_bps * policy.normal_min_share,
                   SUSPICIOUS: 0.0, RESTRICTED: 0.0}
-    ceilings = {CRITICAL: capacity_bps, NORMAL: capacity_bps, SUSPICIOUS: capacity_bps * policy.suspicious_max_share,
-                RESTRICTED: capacity_bps}
+    ceilings = {CRITICAL: capacity_bps * policy.critical_max_share, NORMAL: capacity_bps * policy.normal_max_share,
+                SUSPICIOUS: capacity_bps * policy.suspicious_max_share, RESTRICTED: capacity_bps}
+    weights = {**WEIGHTS, CRITICAL: policy.critical_weight, NORMAL: policy.normal_weight}
     level_one = allocate(capacity_bps, policy.safety_margin, [
-        TrafficClass(name, min(guaranteed[name], wanted(name), ceilings[name]), ceilings[name], WEIGHTS[name], wanted(name))
+        TrafficClass(name, min(guaranteed[name], wanted(name), ceilings[name]), ceilings[name], weights[name], wanted(name))
         for name in CLASSES])
     granted = {a.name: a for a in level_one.allocations}
     classes: Dict[str, ClassGrant] = {}

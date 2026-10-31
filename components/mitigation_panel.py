@@ -83,7 +83,7 @@ def _evidence(m: Mapping[str, Any]) -> str:
     return " · ".join(parts)
 
 
-def _render_proposal(principal: Principal, m: Dict[str, Any]) -> None:
+def render_proposal(principal: Principal, m: Dict[str, Any]) -> None:
     with st.container(border=True):
         st.markdown(f"**#{m['id']} · {_sentence(m['description'])}**")
         st.caption(_evidence(m))
@@ -98,12 +98,12 @@ def _render_proposal(principal: Principal, m: Dict[str, Any]) -> None:
         confirm = st.text_input(f"Type {m['target']} to confirm", key=f"mitigation_confirm_{m['id']}") if high_impact else None
         c1, c2 = st.columns(2)
         if c1.button("Approve", key=f"mitigation_approve_{m['id']}", type="primary"):
-            _attempt(mitigation_service.approve, principal, m["id"], reason=reason, confirm_target=confirm)
+            attempt(mitigation_service.approve, principal, m["id"], reason=reason, confirm_target=confirm)
         if c2.button("Reject", key=f"mitigation_reject_{m['id']}"):
-            _attempt(mitigation_service.reject, principal, m["id"], reason=reason)
+            attempt(mitigation_service.reject, principal, m["id"], reason=reason)
 
 
-def _attempt(function, *args, **kwargs) -> None:
+def attempt(function, *args, **kwargs) -> None:
     try:
         result = function(*args, **kwargs)
     except (MitigationError, PermissionDenied) as exc:
@@ -115,17 +115,18 @@ def _attempt(function, *args, **kwargs) -> None:
     st.rerun()
 
 
-def _compare_rows(before: Optional[Mapping[str, Any]], after: Optional[Mapping[str, Any]], target_kind: str) -> pd.DataFrame:
+def compare_rows(before: Optional[Mapping[str, Any]], after: Optional[Mapping[str, Any]], target_kind: str) -> pd.DataFrame:
     before, after = before or {}, after or {}
     bits = format_bits_rate
 
     def cell(value: Optional[str]) -> str:
         return value if value is not None else "Unavailable"
 
-    rows = [("Carried by the link", bits(before.get("throughput_bps")), bits(after.get("throughput_bps"))),
+    rows = [("Incoming traffic", bits(before.get("incoming_bps")), bits(after.get("incoming_bps"))),
+            ("Carried by the link", bits(before.get("throughput_bps")), bits(after.get("throughput_bps"))),
             ("Link utilization", format_ratio(before.get("utilization")), format_ratio(after.get("utilization"))),
             ("Dropped by the link", format_ratio(before.get("loss_ratio")), format_ratio(after.get("loss_ratio"))),
-            ("Other traffic delivered", bits(before.get("other_bps")), bits(after.get("other_bps")))]
+            ("Legitimate traffic delivered", bits(before.get("other_bps")), bits(after.get("other_bps")))]
     if target_kind != "link":
         rows.insert(0, ("Target's traffic", bits(before.get("target_bps")), bits(after.get("target_bps"))))
     latency = (before.get("latency_ms"), after.get("latency_ms"))
@@ -157,13 +158,13 @@ def render_action(principal: Principal, m: Dict[str, Any], *, key_prefix: str = 
         if m["recovery_note"]:
             st.markdown(m["recovery_note"])
         if (m["before"] or {}).get("samples"):  # with no samples every cell would only say Unavailable
-            st.dataframe(_compare_rows(m["before"], m["after"], m["target_kind"]), hide_index=True, width="stretch")
+            st.dataframe(compare_rows(m["before"], m["after"], m["target_kind"]), hide_index=True, width="stretch")
         if m["commands"]:
             with st.expander("Commands that would run" if m["adapter"] == enforcement_service.DRY_RUN else "Commands that ran"):
                 st.code(enforcement_service.describe_commands(m["commands"]), language="text")
         if m["status"] == "active" and principal.has(Permission.APPLY_TRAFFIC_POLICY):
             if st.button("Roll back", key=f"mitigation_rollback_{key_prefix}{m['id']}", icon=":material/undo:"):
-                _attempt(mitigation_service.rollback, principal, m["id"], reason="Rolled back from the dashboard")
+                attempt(mitigation_service.rollback, principal, m["id"], reason="Rolled back from the dashboard")
 
 
 def render_session(principal: Principal, session_id: int, *, provenance: str = "simulated") -> None:
@@ -181,10 +182,16 @@ def render_session(principal: Principal, session_id: int, *, provenance: str = "
     section_label("Bandwidth allocation")
     st.markdown(provenance_chip(provenance), unsafe_allow_html=True)
     _render_allocation(principal, session_id, provenance)
+    if provenance == "simulated" and principal.has(Permission.APPLY_TRAFFIC_POLICY) and not any(
+            m["action_type"] == "prioritize" and m["status"] in ("active", "proposed") for m in actions):
+        if st.button("Prioritize critical traffic", key=f"mitigation_prioritize_{session_id}", icon=":material/low_priority:",
+                     help="Caps every sender at its allocated share, so critical traffic keeps its guarantee when the link is full."):
+            attempt(mitigation_service.request_action, principal, session_id, "prioritize",
+                    reason="Prioritized from the dashboard")
     if proposed:
         section_label("Waiting for a decision")
         for m in proposed:
-            _render_proposal(principal, m)
+            render_proposal(principal, m)
     if active:
         section_label("Active")
         for m in active:

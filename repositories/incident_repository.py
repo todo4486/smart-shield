@@ -17,6 +17,14 @@ _METRIC_ORIGIN = ("CASE WHEN session_id IN (SELECT id FROM monitoring_sessions W
                   "WHEN session_id IN (SELECT id FROM monitoring_sessions WHERE source_type = 'simulation') "
                   "THEN 'simulation' ELSE 'real' END")
 _PREDICTION_ORIGIN = ("CASE source_name WHEN ? THEN 'replay' WHEN ? THEN 'simulation' ELSE 'real' END")
+# What the incident's mitigation actions are doing right now. A dry run changes nothing, so it is counted apart.
+_MITIGATION_STATE = (
+    "(SELECT COUNT(*) FROM mitigation_actions m WHERE m.incident_id = i.id AND m.status = 'active' "
+    "AND COALESCE(m.adapter, '') <> 'dry-run') AS mitigations_active, "
+    "(SELECT COUNT(*) FROM mitigation_actions m WHERE m.incident_id = i.id AND m.status = 'active' "
+    "AND m.adapter = 'dry-run') AS mitigations_dry_run, "
+    "(SELECT COUNT(*) FROM mitigation_actions m WHERE m.incident_id = i.id AND m.status = 'proposed') AS mitigations_proposed, "
+    "(SELECT m.status FROM mitigation_actions m WHERE m.incident_id = i.id ORDER BY m.id DESC LIMIT 1) AS mitigation_last_status")
 
 
 def unlinked_alerts(conn: sqlite3.Connection, statuses: tuple = ("open", "acknowledged")) -> List[sqlite3.Row]:
@@ -48,7 +56,7 @@ def insert(conn: sqlite3.Connection, values: Dict[str, Any]) -> int:
 def update(conn: sqlite3.Connection, incident_id: int, values: Dict[str, Any]) -> None:
     allowed = ("title", "classification", "status", "window_start", "window_end", "measured_changes_json",
                "model_outputs_json", "correlation_rationale", "investigation_steps_json", "updated_at",
-               "investigation_notes", "assigned_to")
+               "investigation_notes", "assigned_to", "resolution")
     keys = [k for k in values if k in allowed]
     conn.execute(f"UPDATE incidents SET {', '.join(f'{k} = ?' for k in keys)} WHERE id = ?",
                  tuple(values[k] for k in keys) + (incident_id,))
@@ -60,7 +68,7 @@ def link(conn: sqlite3.Connection, incident_id: int, alert_id: int) -> None:
 
 def get(conn: sqlite3.Connection, incident_id: int) -> Optional[sqlite3.Row]:
     return conn.execute(
-        "SELECT i.*, u.email AS assigned_email FROM incidents i LEFT JOIN users u ON u.id = i.assigned_to "
+        f"SELECT i.*, u.email AS assigned_email, {_MITIGATION_STATE} FROM incidents i LEFT JOIN users u ON u.id = i.assigned_to "
         "WHERE i.id = ?", (incident_id,)).fetchone()
 
 
@@ -72,7 +80,7 @@ def alerts_for(conn: sqlite3.Connection, incident_id: int) -> List[sqlite3.Row]:
 
 
 def list_incidents(conn: sqlite3.Connection, statuses: Optional[List[str]] = None, limit: int = 300) -> List[sqlite3.Row]:
-    sql = ("SELECT i.*, u.email AS assigned_email, "
+    sql = (f"SELECT i.*, u.email AS assigned_email, {_MITIGATION_STATE}, "
            "(SELECT COUNT(*) FROM incident_alerts ia WHERE ia.incident_id = i.id) AS alert_count, "
            "(SELECT a.severity FROM incident_alerts ia JOIN alerts a ON a.id = ia.alert_id WHERE ia.incident_id = i.id "
            " ORDER BY CASE a.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END "

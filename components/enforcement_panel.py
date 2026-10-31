@@ -8,7 +8,7 @@ import streamlit as st
 
 from components import mitigation_panel
 from components.ui import section_label
-from services import live_monitor_service, mitigation_service, settings_service
+from services import live_monitor_service, mitigation_service, settings_service, simulation_service
 from services.authorization import Permission, PermissionDenied, Principal
 from services.mitigation_service import MitigationError
 from services.settings_service import SettingsError
@@ -116,6 +116,10 @@ def render(principal: Principal) -> None:
 
 def _live_section(principal: Principal) -> None:
     status = live_monitor_service.get_monitor().status
+    simulation = simulation_service.status_copy()
+    if not status.running and simulation.running:
+        mitigation_panel.render_session(principal, simulation.session_id)
+        return
     if not status.running or status.session_id is None:
         st.caption("Start a live capture in Live Monitoring to run the engine on real traffic. Monitor → Simulation shows "
                    "the same engine on a simulated link.")
@@ -134,8 +138,9 @@ def _live_section(principal: Principal) -> None:
 def render_live(principal: Principal) -> None:
     """The engine on the running capture, below the Live network panel."""
     section_label("Threat mitigation")
-    if not mitigation_service.enforcement_status(principal).enforcing:
+    live_running = live_monitor_service.get_monitor().status.running
+    running = live_running or simulation_service.status_copy().running
+    if live_running and not mitigation_service.enforcement_status(principal).enforcing:
         st.caption("Dry run: actions here are recorded and show their commands, but nothing on the network is changed.")
     mitigation_panel.render_policy(principal, key="mitigation_policy_live")
-    running = live_monitor_service.get_monitor().status.running
     st.fragment(_live_section, run_every=2 if running else None)(principal)

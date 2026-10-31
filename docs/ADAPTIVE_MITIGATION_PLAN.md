@@ -1,6 +1,6 @@
 # Adaptive Bandwidth Allocation & Automated Threat Mitigation: review and plan
 
-Status: **approved 2026-10-30; M1, M2, M3 and M4 done, M5 next.** Decisions are recorded in section 6.
+Status: **approved 2026-10-30; M1 to M5 done, M6 next.** Decisions are recorded in section 6.
 
 ## 1. The project today
 
@@ -156,5 +156,20 @@ app.py (st.navigation router; signed out = login page only)
   - **Not verified:** no rule has been loaded into a real kernel on either OS, because that needs root. `tc` commands have only
     run against a fake, since this Mac has no `tc`. `enforcement-check --install` is the way to prove pf or tc on a real machine.
   - Limits live in the kernel, so if the app is killed they stay until the next start, a rollback or a reboot; expiry only runs
-    while the app runs. Live alerts are not correlated into incidents automatically, so live actions link to an incident only
-    after correlation has been run: M5.
+    while the app runs.
+- **M5 (dashboard + Incident Center), done.** `components/attack_response.py`, `components/allocation_controls.py`, upgraded
+  `components/live_network.py`, migration `014` (`incidents.resolution`).
+  - Bandwidth Management has the eight overview tiles, a stacked allocation graph, a host table with one form for per-host
+    limits, blocks and isolation, an Attack response tab and an Allocation controls tab.
+  - Incident statuses are worked out, not stored: Mitigation pending, active (with dry run shown apart) and Failed mitigation come
+    from the incident's actions, so they cannot disagree with what is in force. `status` stays the analyst's workflow. False
+    positive is stored, takes off open actions first, and stops if a rule cannot be removed. An incident cannot be resolved
+    while a limit is in force.
+  - Every action now has an incident: if correlation has not made one, the action opens one, and later alerts join it by time. An
+    administrator's action with no verdict behind it is classified `undetermined`, never an attack.
+  - A running capture correlates its own session's alerts, and no others.
+  - **Known gap against the spec.** "All controls must affect the actual network-control adapter" is only partly met. On a real link
+    the class shares are a plan: approved limits, blocks and isolation are enforced per host, and class policies through `tc`. On
+    the simulated link the shares are enforced while Prioritize is active.
+  - Acceptance 11 is shown on the simulated link only: on a full link the critical application went from 0 to its full 8 Mbit/s
+    once prioritized (test).

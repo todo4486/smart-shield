@@ -27,6 +27,7 @@ HOST_WINDOW_SECONDS = 15
 FLAG_WINDOW_SECONDS = 300
 HISTORY_SAMPLES = 300
 LIVE_SOURCE_TYPES = ("live_capture", "simulation")
+DOCUMENTATION_NETWORKS = tuple(ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24"))
 # Well-known destination ports only. It describes the port, not the application behind it.
 SERVICE_PORTS = {
     20: "File transfer", 21: "File transfer", 22: "Remote access", 23: "Remote access", 25: "Email", 53: "DNS",
@@ -86,6 +87,9 @@ def host_kind(host: str, local_addresses: Set[str]) -> str:
         address = ipaddress.ip_address(host)
     except ValueError:
         return "Other"
+    # Documentation ranges count as private to Python, but they stand for outside addresses wherever they appear.
+    if any(address in network for network in DOCUMENTATION_NETWORKS):
+        return "Internet"
     return "Local network" if address.is_private or address.is_link_local or address.is_multicast else "Internet"
 
 

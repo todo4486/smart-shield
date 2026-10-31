@@ -39,6 +39,7 @@ from repositories import telemetry_repository
 from repositories.incident_repository import SIMULATION_SOURCE_NAME
 from services import (
     alert_service, audit_service, database_service, incident_correlation_service, intrusion_inference_service,
+    settings_service,
     mitigation_service, model_registry_service, monitoring_service,
 )
 from services.authorization import Permission, Principal, require_permission
@@ -425,8 +426,10 @@ class SimulationEngine:
         moment = datetime.fromtimestamp(now, tz=timezone.utc)
         session_id, capacity = self.status.session_id, self.status.capacity_bps
         sources = self._generator.active_sources()
+        extra_critical = mitigation_service.critical_ports(settings_service.get_mitigation_settings())
+        is_critical = lambda s: s.traffic_class == "critical" or (s.traffic_class != "attack" and s.port in extra_critical)  # noqa: E731
         plan = mitigation_service.plan_interval(session_id, capacity, [
-            SenderDemand(s.sender, s.receiver, "critical" if s.traffic_class == "critical" else "normal", s.offered_bps)
+            SenderDemand(s.sender, s.receiver, "critical" if is_critical(s) else "normal", s.offered_bps)
             for s in sources], moment)
         tick = self._generator.tick(now, seconds, plan.policy)
         finished = []
@@ -438,7 +441,7 @@ class SimulationEngine:
         verdicts = self._score(finished)
         created = self._store(now, seconds, tick, hosts, finished, verdicts)
         mitigation_service.record_interval(
-            session_id, plan, hosts, {s.sender for s in sources if s.traffic_class == "critical"},
+            session_id, plan, hosts, {s.sender for s in sources if is_critical(s)},
             datetime.fromtimestamp(now + seconds, tz=timezone.utc))
         with self._lock:
             status = self.status

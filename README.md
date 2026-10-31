@@ -46,7 +46,7 @@ models loaded (✓ = SHA-256 verified) and the data-source badge. New high or cr
 | | **Replay / demo** | Play a labelled dataset through the real models at 1×–30× (pause, speed, restart, stop), clearly labelled DATASET REPLAY; admins can clear replay data |
 | Intelligence | **Smart Shield Security** | Run detection on datasets; alerts with ATT&CK badges and a **"Why was this flagged?"** panel; triage; **Noise control** suppression rules (admins create, analysts request) |
 | | **PredictNet Congestion** | Per-link risk gauges, forecast with error band, threshold lines and a "now" marker, "Congestion likely in ~N min" card, model vs baselines |
-| | **Bandwidth Management** | Policies, recommendations with animated water-filling, review, and optional Linux `tc` enforcement through a confirmation dialog (before/after split, exact commands, typed confirmation), Active policies with Revert |
+| | **Bandwidth Management** | Live overview, allocation graph and host table with per-host actions; attack response before and after; allocation controls; policies, recommendations with animated water-filling, review, and optional enforcement (dry run by default) |
 | | **What-if simulator** | Sandbox for capacity, classes, demands and weights using the same allocator; admins can propose the result as a policy |
 | | **ML Laboratory** | Data import and validation, Smart Shield and PredictNet training and evaluation, and a SHA-256-verified model registry |
 | | **Model health** | Model cards (data, split, test metrics, confusion matrix, verification) and a read-only PSI drift check |

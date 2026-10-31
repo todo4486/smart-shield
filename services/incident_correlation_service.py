@@ -42,8 +42,36 @@ TRANSITIONS = {"open": {"investigating", "resolved"}, "investigating": {"resolve
                "resolved": {"closed", "open"}, "closed": set()}
 
 
+# What an incident is doing, as people ask about it. `status` remains the analyst's workflow; the rest comes from the
+# incident's mitigation actions, so it cannot disagree with what is in force.
+DETECTED, INVESTIGATING, PENDING = "Detected", "Investigating", "Mitigation pending"
+ACTIVE, DRY_RUN_ACTIVE = "Mitigation active", "Mitigation active (dry run)"
+RESOLVED, FALSE_POSITIVE, FAILED, CLOSED = "Resolved", "False positive", "Failed mitigation", "Closed"
+LIFECYCLE = (DETECTED, INVESTIGATING, PENDING, ACTIVE, DRY_RUN_ACTIVE, FAILED, RESOLVED, FALSE_POSITIVE, CLOSED)
+LIFECYCLE_FINISHED = (RESOLVED, FALSE_POSITIVE, CLOSED)
+
+
 class IncidentError(Exception):
     pass
+
+
+def lifecycle(row: Any) -> str:
+    """Something in force always shows, even on a resolved incident, because that is what an administrator must not miss."""
+    if row["mitigations_active"]:
+        return ACTIVE
+    if row["mitigations_dry_run"]:
+        return DRY_RUN_ACTIVE
+    if row["resolution"] == "false_positive":
+        return FALSE_POSITIVE
+    if row["status"] == "closed":
+        return CLOSED
+    if row["status"] == "resolved":
+        return RESOLVED
+    if row["mitigations_proposed"]:
+        return PENDING
+    if row["mitigation_last_status"] == "failed":
+        return FAILED
+    return INVESTIGATING if row["status"] == "investigating" else DETECTED
 
 
 @dataclass
@@ -87,6 +115,8 @@ class Incident:
     assigned_email: Optional[str] = None
     is_replay: bool = False  # built from DATASET REPLAY alerts only
     is_simulation: bool = False  # built from SIMULATION alerts only
+    lifecycle: str = DETECTED
+    resolution: Optional[str] = None
 
     @property
     def not_an_attack(self) -> bool:
@@ -249,9 +279,10 @@ def _incident_origin(incident: Dict[str, Any]) -> str:
 
 
 def correlate(principal: Principal, window_minutes: int = DEFAULT_WINDOW_MINUTES,
-              origin: Optional[str] = None) -> CorrelationRun:
+              origin: Optional[str] = None, session_id: Optional[int] = None) -> CorrelationRun:
     """Group unlinked alerts into incidents. `origin` limits it to one kind of data, so a replay or simulation only ever
-    touches its own alerts; without it, each origin's alerts are grouped separately."""
+    touches its own alerts; without it, each origin's alerts are grouped separately. `session_id` limits it to the alerts
+    of one session, so a running capture never sweeps up alerts an analyst has not chosen to correlate."""
     require_permission(principal, Permission.RUN_DETECTION, action="incident.correlate")
     if not 1 <= int(window_minutes) <= 24 * 60:
         raise IncidentError("Correlation window must be between 1 minute and 24 hours.")
@@ -259,7 +290,8 @@ def correlate(principal: Principal, window_minutes: int = DEFAULT_WINDOW_MINUTES
     run = CorrelationRun()
     now = utc_now_iso()
     with database_service.session(write=True) as conn:
-        events = [e for e in (event_for(r) for r in incident_repository.unlinked_alerts(conn))
+        events = [e for e in (event_for(r) for r in incident_repository.unlinked_alerts(conn)
+                              if session_id is None or r["session_id"] == session_id)
                   if origin is None or e.origin == origin]
         if not events:
             return run
@@ -336,13 +368,14 @@ def _incident(row, alerts=None) -> Incident:
         assigned_email=row["assigned_email"] if "assigned_email" in row.keys() else None,
         is_replay=bool(row["is_replay"]) if "is_replay" in row.keys() else False,
         is_simulation=bool(row["is_simulation"]) if "is_simulation" in row.keys() else False,
+        lifecycle=lifecycle(row), resolution=row["resolution"],
     )
 
 
 def list_incidents(principal: Principal, statuses: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     require_permission(principal, Permission.VIEW_ALERTS, action="incident.list")
     with database_service.session() as conn:
-        return [dict(r) for r in incident_repository.list_incidents(conn, statuses)]
+        return [{**dict(r), "lifecycle": lifecycle(r)} for r in incident_repository.list_incidents(conn, statuses)]
 
 
 def get_incident(principal: Principal, incident_id: int) -> Incident:
@@ -384,7 +417,11 @@ def change_status(principal: Principal, incident_id: int, new_status: str, note:
             raise IncidentError("Incident not found.")
         if new_status not in TRANSITIONS[row["status"]]:
             raise IncidentError(f"An incident cannot move from {row['status']} to {new_status}.")
+        if new_status in ("resolved", "closed") and row["mitigations_active"] + row["mitigations_dry_run"]:
+            raise IncidentError("A mitigation is still active on this incident. Roll it back or wait for it to expire first.")
         values: Dict[str, Any] = {"status": new_status, "updated_at": now}
+        if new_status == "open":
+            values["resolution"] = None
         note = (note or "").strip()[:2000]
         incident_repository.insert_event(conn, incident_id=incident_id, event_type="status_change",
                                          from_status=row["status"], to_status=new_status, note=note or None,
@@ -395,6 +432,34 @@ def change_status(principal: Principal, incident_id: int, new_status: str, note:
         incident_repository.update(conn, incident_id, values)
         audit_service.record(conn, user_id=principal.user_id, action="incident.change_status",
                              details={"incident_id": incident_id, "from": row["status"], "to": new_status})
+
+
+def mark_false_positive(principal: Principal, incident_id: int, reason: str) -> None:
+    """Resolved, and recorded as a false positive, with its open alerts. Refused while a mitigation is open:
+    mitigation_service.close_as_false_positive takes those off first."""
+    require_permission(principal, Permission.TRIAGE_ALERTS, action="incident.false_positive",
+                       details={"incident_id": incident_id})
+    text = (reason or "").strip()[:2000]
+    if len(text) < 5:
+        raise IncidentError("Give a reason of at least 5 characters.")
+    now = utc_now_iso()
+    with database_service.session(write=True) as conn:
+        row = incident_repository.get(conn, incident_id)
+        if row is None:
+            raise IncidentError("Incident not found.")
+        if row["status"] == "closed":
+            raise IncidentError("A closed incident cannot be changed.")
+        if row["mitigations_active"] + row["mitigations_dry_run"] + row["mitigations_proposed"]:
+            raise IncidentError("This incident has mitigation actions still open. An administrator must take them off first.")
+        alert_ids = [a["id"] for a in incident_repository.alerts_for(conn, incident_id) if a["status"] in ("open", "acknowledged")]
+        incident_repository.update(conn, incident_id, {"status": "resolved", "resolution": "false_positive", "updated_at": now})
+        incident_repository.insert_event(conn, incident_id=incident_id, event_type="status_change", from_status=row["status"],
+                                         to_status="resolved", note=f"False positive: {text}"[:2000], user_id=principal.user_id,
+                                         now=now)
+        audit_service.record(conn, user_id=principal.user_id, action="incident.false_positive",
+                             details={"incident_id": incident_id, "reason": text[:200]})
+    for alert_id in alert_ids:
+        alert_service.change_status(principal, alert_id, "false_positive", f"Incident #{incident_id}: {text}")
 
 
 def add_note(principal: Principal, incident_id: int, note: str) -> None:

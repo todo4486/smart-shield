@@ -33,7 +33,8 @@ import pandas as pd
 
 from repositories import monitoring_repository, telemetry_repository
 from services import (
-    alert_service, audit_service, capture_worker, database_service, mitigation_service, model_registry_service,
+    alert_service, audit_service, capture_worker, database_service, incident_correlation_service, mitigation_service,
+    model_registry_service,
     monitoring_service, settings_service,
 )
 from services.authorization import Permission, Principal, require_permission
@@ -141,6 +142,7 @@ class LiveMonitor:
         self._detector: Optional[Dict[str, Any]] = None
         self._max_flows = 100_000
         self._capacity: Optional[float] = None
+        self._principal: Optional[Principal] = None
 
     # ------------------------------------------------------------ control
     def start(self, principal: Principal, interface: str, *, mode: str = "counters",
@@ -182,6 +184,7 @@ class LiveMonitor:
                 audit_service.record(conn, user_id=principal.user_id, action="monitoring.start",
                                      details={"session_id": session_id, "interface": interface, "mode": mode})
             self._detector = detection
+            self._principal = principal
             self._max_flows = settings.max_flows_per_session
             self._capacity = capacity_bps
             self.status = LiveStatus(running=True, session_id=session_id, state="STARTING", interface=interface,
@@ -458,6 +461,9 @@ class LiveMonitor:
         self.status.flows_not_stored += len(skipped)
         self.status.flows_scored += sum(1 for v in verdicts if v)
         self.status.flagged += sum(1 for v in verdicts if v.get("category"))
+        if any(v.get("category") for v in verdicts) and self._principal.has(Permission.RUN_DETECTION):
+            # Before the engine, so a mitigation joins the incident its alerts belong to.
+            self._engine(lambda: incident_correlation_service.correlate(self._principal, origin="real", session_id=session_id))
         self._run_engine(metrics)
 
     def _raise_alerts(self, conn, flows: List[Dict[str, Any]], verdicts: List[Dict[str, Any]]) -> None:

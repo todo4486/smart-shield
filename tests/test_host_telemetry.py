@@ -84,6 +84,7 @@ def test_host_kind_and_traffic_class():
     assert live.host_kind("10.0.0.1", {"10.0.0.1"}) == "This machine"
     assert live.host_kind("192.168.1.9", set()) == "Local network"
     assert live.host_kind("8.8.8.8", set()) == "Internet"
+    assert live.host_kind("203.0.113.9", set()) == "Internet"  # a documentation range stands for an outside address
     assert live.host_kind("nope", set()) == "Other"
     assert live.traffic_class([443, 443, 53, 9999, 9999, 9999]) == "Web"  # known ports win over unknown ones
     assert live.traffic_class([9999]) == "Other traffic" and live.traffic_class([None]) == "Other traffic"

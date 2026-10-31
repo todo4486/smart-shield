@@ -7,13 +7,14 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from components import mitre, severity
+from components import attack_response, mitre, severity
 from components.guard import require_principal
 from components.theme import COLORS, MONO_FONT, SERIES_COLORS, apply_chart_theme, palette
 from components.ui import format_bits_rate, format_ratio, format_timestamp, kpi_tile, page_header, section_label
-from services import alert_service, incident_correlation_service as correlation
+from services import alert_service, incident_correlation_service as correlation, mitigation_service
 from services.authorization import Permission, PermissionDenied
 from services.incident_correlation_service import IncidentError
+from services.mitigation_service import MitigationError
 
 principal = require_principal()
 
@@ -123,6 +124,13 @@ def _triage(incident) -> None:
         if st.button("Resolve", icon=":material/task_alt:", type="primary", width="stretch", disabled=not resolvable,
                      help="Marks the incident resolved." if resolvable else "Already resolved or closed."):
             _run(lambda: correlation.change_status(principal, incident.id, "resolved"))
+    if incident.status != "closed" and incident.lifecycle != correlation.FALSE_POSITIVE:
+        with st.popover("Mark as false positive", icon=":material/report_off:"):
+            st.caption("Resolves the incident and its open alerts as false positives. Any action still open on it is "
+                       "rolled back or rejected first, which needs an administrator.")
+            reason = st.text_input("Reason", key=f"false_positive_reason_{incident.id}", placeholder="Why, at least 5 characters")
+            if st.button("Mark as false positive", key=f"false_positive_{incident.id}"):
+                _run(lambda: mitigation_service.close_as_false_positive(principal, incident.id, reason=reason))
     others = sorted(correlation.TRANSITIONS[incident.status] - {"investigating", "resolved"})
     if others:
         with st.popover("More status changes"):
@@ -134,7 +142,7 @@ def _triage(incident) -> None:
 def _run(action) -> None:
     try:
         action()
-    except (IncidentError, PermissionDenied) as exc:
+    except (IncidentError, MitigationError, PermissionDenied) as exc:
         st.error(str(exc))
     else:
         st.rerun()
@@ -159,8 +167,9 @@ with incidents_tab:
                 else:
                     st.success(f"Linked {result.alerts_linked} alert(s): {len(result.incidents_created)} new "
                                f"incident(s), {len(result.incidents_updated)} updated. They are highlighted below.")
-    statuses = st.multiselect("Status", list(correlation.STATUSES), default=["open", "investigating"])
-    incidents = correlation.list_incidents(principal, statuses or None)
+    statuses = st.multiselect("Status", list(correlation.LIFECYCLE),
+                              default=[s for s in correlation.LIFECYCLE if s not in correlation.LIFECYCLE_FINISHED])
+    incidents = [i for i in correlation.list_incidents(principal) if not statuses or i["lifecycle"] in statuses]
 
     # Permalink: ?incident=42 selects that incident (still behind sign-in).
     linked = st.query_params.get("incident")
@@ -172,7 +181,7 @@ with incidents_tab:
             st.warning(f"Incident #{linked_id} from the link does not exist.")
         else:
             incidents = [{"id": extra.id, "title": extra.title, "classification": extra.classification,
-                          "status": extra.status, "alert_count": len(extra.alerts),
+                          "status": extra.status, "lifecycle": extra.lifecycle, "alert_count": len(extra.alerts),
                           "window_start": extra.window_start, "window_end": extra.window_end,
                           "assigned_email": extra.assigned_email,
                           "top_severity": severity.highest(a.severity for a in extra.alerts)}] + incidents
@@ -195,7 +204,7 @@ with incidents_tab:
             "ID": i["id"], "Severity": severity.plain(i.get("top_severity")),
             "Type": CLASS_STYLE.get(i["classification"], ("", i["classification"]))[1]
             + (" · Not an attack" if i["classification"] == "performance" else ""),
-            "Title": i["title"], "Status": i["status"], "Assigned": i.get("assigned_email") or "—",
+            "Title": i["title"], "Status": i["lifecycle"], "Assigned": i.get("assigned_email") or "—",
             "Source": "DATASET REPLAY" if i.get("is_replay") else "SIMULATION" if i.get("is_simulation")
             else "Captured / imported",
             "Alerts": i["alert_count"], "Window start": format_timestamp(i["window_start"]),
@@ -220,7 +229,7 @@ with incidents_tab:
         techniques = mitre.incident_badges(attack_labels)
         st.markdown(
             f"<div class='ss-card' style='border-left:4px solid {color}'><h4>#{incident.id} · {escape(label)} · "
-            f"{escape(incident.status)} {badges}</h4><p>{escape(incident.rationale)}</p>"
+            f"{escape(incident.lifecycle)} {badges}</h4><p>{escape(incident.rationale)}</p>"
             + (f"<div style='margin-top:.5rem'>{techniques}</div>" if techniques else "") + "</div>",
             unsafe_allow_html=True,
         )
@@ -248,6 +257,7 @@ with incidents_tab:
         st.caption(f"Assigned to: **{incident.assigned_email or 'nobody'}**. Acknowledge → assign → resolve; "
                    "every step is recorded in the history and the audit log.")
         _triage(incident)
+        attack_response.render_incident(principal, incident.id, incident.alerts)
 
         # Timeline: measured throughput around the window with each alert's interval.
         data = correlation.timeline(principal, incident)

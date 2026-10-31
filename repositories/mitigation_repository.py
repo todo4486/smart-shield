@@ -116,11 +116,34 @@ def host_metrics_between(conn: sqlite3.Connection, session_id: int, start: str, 
 
 
 def incident_for_category(conn: sqlite3.Connection, session_id: int, category: Optional[str]) -> Optional[int]:
-    """The newest incident holding an alert of this session and category, or of this session if none matches."""
+    """The newest unfinished incident holding an alert of this session and category, or of this session if none matches,
+    or already holding a mitigation of this session."""
     row = conn.execute(
-        "SELECT ia.incident_id FROM incident_alerts ia JOIN alerts a ON a.id = ia.alert_id WHERE a.session_id = ? "
+        "SELECT ia.incident_id FROM incident_alerts ia JOIN alerts a ON a.id = ia.alert_id JOIN incidents i ON i.id = ia.incident_id "
+        "WHERE a.session_id = ? AND i.status IN ('open', 'investigating') "
         "ORDER BY (a.category = ?) DESC, ia.incident_id DESC LIMIT 1", (session_id, category)).fetchone()
+    if row is None:
+        row = conn.execute(
+            "SELECT m.incident_id FROM mitigation_actions m JOIN incidents i ON i.id = m.incident_id WHERE m.session_id = ? "
+            "AND i.status IN ('open', 'investigating') ORDER BY m.id DESC LIMIT 1", (session_id,)).fetchone()
     return None if row is None else int(row["incident_id"])
+
+
+def of_incident(conn: sqlite3.Connection, incident_id: int) -> List[sqlite3.Row]:
+    return conn.execute("SELECT * FROM mitigation_actions WHERE incident_id = ? ORDER BY id DESC", (incident_id,)).fetchall()
+
+
+def recent_applied(conn: sqlite3.Connection, limit: int = 30) -> List[sqlite3.Row]:
+    return conn.execute("SELECT * FROM mitigation_actions WHERE applied_at IS NOT NULL ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+
+def destination_ports_since(conn: sqlite3.Connection, session_id: int, since: str) -> Dict[str, List[Optional[int]]]:
+    rows = conn.execute("SELECT src_ip, dst_port FROM network_flows WHERE session_id = ? AND timestamp >= ? AND src_ip IS NOT NULL",
+                        (session_id, since)).fetchall()
+    ports: Dict[str, List[Optional[int]]] = {}
+    for row in rows:
+        ports.setdefault(row["src_ip"], []).append(row["dst_port"])
+    return ports
 
 
 def insert_allocation(conn: sqlite3.Connection, *, session_id: int, timestamp: str, capacity_bps: float, enforced: bool,

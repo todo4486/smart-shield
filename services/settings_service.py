@@ -297,6 +297,12 @@ class MitigationSettings:
     suspicious_max_share: float = 0.10
     critical_hosts: Tuple[str, ...] = ()  # carry critical traffic: top class, and too risky for the engine to limit alone
     protected_hosts: Tuple[str, ...] = ()  # never proposed and never enforced on, for example your gateway
+    adaptive_enabled: bool = True
+    critical_max_share: float = 1.0
+    normal_max_share: float = 1.0
+    critical_weight: float = 6.0  # how the capacity left after minimums is shared
+    normal_weight: float = 3.0
+    critical_services: Tuple[str, ...] = ()  # service names from live_network_service.SERVICE_PORTS treated as critical
 
     def validate(self) -> "MitigationSettings":
         if self.policy not in MITIGATION_POLICIES:
@@ -328,10 +334,26 @@ class MitigationSettings:
             raise SettingsError("Safety margin must be between 0% and 90%.")
         if float(self.critical_min_share) + float(self.normal_min_share) > 1 - float(self.safety_margin) + 1e-9:
             raise SettingsError("The guaranteed minimums exceed the usable capacity after the safety margin.")
+        for name, low, high in (("Critical", self.critical_min_share, self.critical_max_share),
+                                ("Normal", self.normal_min_share, self.normal_max_share)):
+            if not 0 <= float(high) <= 1:
+                raise SettingsError(f"{name} maximum must be between 0% and 100%.")
+            if float(low) > float(high):
+                raise SettingsError(f"{name} minimum cannot be above its maximum.")
+        for name, weight in (("Critical", self.critical_weight), ("Normal", self.normal_weight)):
+            if not 1 <= float(weight) <= 10:
+                raise SettingsError(f"{name} priority must be between 1 and 10.")
         return self
 
 
 MITIGATION_KEY = "mitigation.settings"
+
+
+def restore_mitigation_defaults(principal: Principal) -> MitigationSettings:
+    """Every policy value back to its default. The host lists are the administrator's facts about the network, not policy."""
+    current = get_mitigation_settings()
+    return update_mitigation_settings(principal, MitigationSettings(critical_hosts=current.critical_hosts,
+                                                                    protected_hosts=current.protected_hosts))
 
 
 def get_mitigation_settings() -> MitigationSettings:
@@ -340,7 +362,7 @@ def get_mitigation_settings() -> MitigationSettings:
     if row is None:
         return MitigationSettings()
     stored = {k: v for k, v in json.loads(row["value_json"]).items() if k in MitigationSettings.__dataclass_fields__}
-    for key in ("critical_hosts", "protected_hosts"):
+    for key in ("critical_hosts", "protected_hosts", "critical_services"):
         stored[key] = tuple(stored.get(key, ()))
     return MitigationSettings(**stored).validate()
 

@@ -169,7 +169,7 @@ CREATE TABLE incidents (
     created_by                 INTEGER REFERENCES users (id) ON DELETE SET NULL,
     created_at                 TEXT    NOT NULL,
     updated_at                 TEXT    NOT NULL
-, investigation_notes TEXT, assigned_to INTEGER REFERENCES users (id) ON DELETE SET NULL, is_replay INTEGER NOT NULL DEFAULT 0 CHECK (is_replay IN (0, 1)), is_simulation INTEGER NOT NULL DEFAULT 0 CHECK (is_simulation IN (0, 1)));
+, investigation_notes TEXT, assigned_to INTEGER REFERENCES users (id) ON DELETE SET NULL, is_replay INTEGER NOT NULL DEFAULT 0 CHECK (is_replay IN (0, 1)), is_simulation INTEGER NOT NULL DEFAULT 0 CHECK (is_simulation IN (0, 1)), resolution TEXT CHECK (resolution IS NULL OR resolution IN ('false_positive')));
 
 CREATE TABLE login_attempts (
     id            INTEGER PRIMARY KEY,

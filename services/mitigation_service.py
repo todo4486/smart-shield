@@ -29,8 +29,8 @@ from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Set
 from config import get_settings
 from repositories import incident_repository, mitigation_repository as repo
 from services import (
-    audit_service, database_service, enforcement_service, host_allocation, mitigation_scoring, settings_service,
-    traffic_shaping_service,
+    audit_service, database_service, enforcement_service, host_allocation, incident_correlation_service, live_network_service,
+    mitigation_scoring, settings_service, traffic_shaping_service,
 )
 from services.authorization import Permission, Principal, require_permission
 from services.bandwidth_allocation import AllocationError
@@ -117,7 +117,13 @@ class IntervalPlan:
 
 def _allocation_policy(settings: MitigationSettings) -> AllocationPolicy:
     return AllocationPolicy(settings.safety_margin, settings.critical_min_share, settings.normal_min_share,
-                            settings.suspicious_max_share)
+                            settings.suspicious_max_share, settings.critical_max_share, settings.normal_max_share,
+                            settings.critical_weight, settings.normal_weight)
+
+
+def critical_ports(settings: MitigationSettings) -> Set[int]:
+    """Destination ports of the services an administrator marked critical."""
+    return {port for port, name in live_network_service.SERVICE_PORTS.items() if name in settings.critical_services}
 
 
 def _thresholds(settings: MitigationSettings) -> Thresholds:
@@ -188,7 +194,7 @@ def plan_interval(session_id: int, capacity_bps: float, demands: Sequence[Sender
     policy = _policy_from(active)
     allocation = host_allocation.allocate_hosts(capacity_bps, _allocation_policy(settings),
                                                 classify_demands(demands, policy, flagged))
-    if any(m["action_type"] == "prioritize" and m["adapter"] != DRY_RUN for m in active):
+    if settings.adaptive_enabled and any(m["action_type"] == "prioritize" and m["adapter"] != DRY_RUN for m in active):
         policy = LinkPolicy(policy.source_limits, policy.destination_limits, policy.blocked, policy.isolated,
                             {h.host: float(h.allocated_bps) for h in allocation.hosts.values()})
     return IntervalPlan(policy, allocation)
@@ -203,12 +209,13 @@ def _allocation_summary(allocation: HostAllocation) -> Dict[str, Any]:
 def record_interval(session_id: int, plan: IntervalPlan, hosts: Sequence[Mapping[str, Any]],
                     critical_hosts: Set[str], now: datetime) -> None:
     """Called after an interval's samples are stored: keep the allocation, check earlier actions, assess new threats."""
-    summary = _allocation_summary(plan.allocation)
-    with database_service.session(write=True) as conn:
-        repo.insert_allocation(
-            conn, session_id=session_id, timestamp=to_iso(now), capacity_bps=plan.allocation.capacity_bps,
-            enforced=plan.policy.enforcing, classes_json=json.dumps(summary, sort_keys=True),
-            hosts_json=json.dumps([asdict(h) for h in plan.allocation.hosts.values()], sort_keys=True))
+    if settings_service.get_mitigation_settings().adaptive_enabled:
+        summary = _allocation_summary(plan.allocation)
+        with database_service.session(write=True) as conn:
+            repo.insert_allocation(
+                conn, session_id=session_id, timestamp=to_iso(now), capacity_bps=plan.allocation.capacity_bps,
+                enforced=plan.policy.enforcing, classes_json=json.dumps(summary, sort_keys=True),
+                hosts_json=json.dumps([asdict(h) for h in plan.allocation.hosts.values()], sort_keys=True))
     _after_interval(session_id, plan.allocation.capacity_bps, hosts, critical_hosts, now)
 
 
@@ -222,13 +229,17 @@ def _after_interval(session_id: int, capacity_bps: Optional[float], hosts: Seque
 def run_live_interval(session_id: int, capacity_bps: Optional[float], hosts: Sequence[Mapping[str, Any]], now: datetime) -> None:
     """One interval of a live capture. Without a configured capacity there is no allocation, and nothing is invented:
     threats are still assessed, and a limit is proposed from the host's measured rate alone."""
-    critical = set(settings_service.get_mitigation_settings().critical_hosts)
+    settings = settings_service.get_mitigation_settings()
+    since = to_iso(now - timedelta(seconds=ASSESS_WINDOW_SECONDS))
+    with database_service.session() as conn:
+        receivers = repo.top_receivers_since(conn, session_id, since)
+        ports = repo.destination_ports_since(conn, session_id, since) if settings.critical_services else {}
+    critical = set(settings.critical_hosts) | {host for host, seen in ports.items()
+                                               if live_network_service.traffic_class(seen) in settings.critical_services}
     if not capacity_bps:
         expire_due(now)
         _after_interval(session_id, None, hosts, critical, now)
         return
-    with database_service.session() as conn:
-        receivers = repo.top_receivers_since(conn, session_id, to_iso(now - timedelta(seconds=ASSESS_WINDOW_SECONDS)))
     demands = [SenderDemand(h["host"], receivers.get(h["host"], ""),
                             host_allocation.CRITICAL if h["host"] in critical else host_allocation.NORMAL, float(h["sent_bps"]))
                for h in hosts]
@@ -563,19 +574,32 @@ def _note_incident(conn, row: Mapping[str, Any], text: str, user_id: Optional[in
                                          now=to_iso(now), note=text[:2000])
 
 
+def _new_incident(conn, session_id: int, m: Mapping[str, Any], now: datetime) -> int:
+    """Every mitigation has an incident. If correlation has not made one yet it can still join this one later, because
+    it groups by time. Without a model verdict this makes no claim about what the traffic is."""
+    source = conn.execute("SELECT source_type FROM monitoring_sessions WHERE id = ?", (session_id,)).fetchone()
+    source_type = source["source_type"] if source else None
+    moment = to_iso(now)
+    what = m["category"] or "Administrator action"
+    return incident_repository.insert(conn, {
+        "title": f"{what} on {m['target']}"[:200], "classification": "security" if m["category"] else "undetermined",
+        "status": "open", "window_start": moment, "window_end": moment,
+        "correlation_rationale": (f"Opened by mitigation #{m['id']}: {m['reason']}" if m["category"]
+                                  else f"Opened by an administrator's action, with no model verdict behind it: {m['reason']}"),
+        "investigation_steps_json": json.dumps(["Review the action's evidence below.", "Confirm whether this host and traffic are expected.",
+                                                "Roll the action back, or mark the incident a false positive, if it was wrong."]),
+        "created_at": moment, "updated_at": moment, "is_replay": source_type == "replay",
+        "is_simulation": source_type == "simulation"})
+
+
 def _link_incidents(session_id: int, now: datetime) -> None:
     with database_service.session() as conn:
         unlinked = [dict(r) for r in repo.of_session(conn, session_id) if r["incident_id"] is None]
-        if not unlinked:
-            return
-        found = {m["id"]: repo.incident_for_category(conn, session_id, m["category"]) for m in unlinked}
-    if not any(found.values()):
+    if not unlinked:
         return
     with database_service.session(write=True) as conn:
         for m in unlinked:
-            incident_id = found[m["id"]]
-            if incident_id is None:
-                continue
+            incident_id = repo.incident_for_category(conn, session_id, m["category"]) or _new_incident(conn, session_id, m, now)
             repo.update(conn, m["id"], {"incident_id": incident_id})
             m["incident_id"] = incident_id
             _note_incident(conn, m, f"Mitigation #{m['id']} ({m['status'].replace('_', ' ')}): {describe(m)}. {m['reason']}",
@@ -649,6 +673,15 @@ def _load(conn, mitigation_id: int) -> Dict[str, Any]:
     return dict(row)
 
 
+def _acted(result: Dict[str, Any], session_id: Optional[int], now: datetime) -> Dict[str, Any]:
+    """An administrator's decision should reach its incident at once, with or without an engine running."""
+    if session_id is None:
+        return result
+    _link_incidents(session_id, now)
+    with database_service.session() as conn:
+        return dict(repo.get(conn, result["id"]))
+
+
 def approve(principal: Principal, mitigation_id: int, *, reason: str, confirm_target: Optional[str] = None,
             limit_bps: Optional[float] = None, duration_minutes: Optional[float] = None,
             now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -670,7 +703,7 @@ def approve(principal: Principal, mitigation_id: int, *, reason: str, confirm_ta
         if changes:
             repo.update(conn, mitigation_id, changes)
             row.update(changes)
-    return _apply(row, decided_by=principal.user_id, note=text, now=moment)
+    return _acted(_apply(row, decided_by=principal.user_id, note=text, now=moment), row["session_id"], moment)
 
 
 def reject(principal: Principal, mitigation_id: int, *, reason: str, now: Optional[datetime] = None) -> None:
@@ -744,7 +777,7 @@ def request_action(principal: Principal, session_id: int, action_type: str, *, t
             "reason": text, "source_ip": target if target_kind == "source" else None,
             "destination_ip": target if target_kind == "destination" else None, "created_at": to_iso(moment)})
         fresh = dict(repo.get(conn, mitigation_id))
-    return _apply(fresh, decided_by=principal.user_id, note=text, now=moment)
+    return _acted(_apply(fresh, decided_by=principal.user_id, note=text, now=moment), session_id, moment)
 
 
 def emergency_disable(principal: Principal, *, reason: str, now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -775,6 +808,28 @@ def emergency_disable(principal: Principal, *, reason: str, now: Optional[dateti
     return {"ended": ended, "failures": failures}
 
 
+def close_as_false_positive(principal: Principal, incident_id: int, *, reason: str, now: Optional[datetime] = None) -> None:
+    """Take off whatever the incident's actions are doing, then record the false positive. If a removal fails it stops
+    there, so an incident is never called a false positive while its limit is still in force."""
+    with database_service.session() as conn:
+        rows = [dict(r) for r in repo.of_incident(conn, incident_id) if r["status"] in repo.OPEN_STATUSES]
+    text = f"False positive: {(reason or '').strip()}"[:500]
+    if rows:
+        require_permission(principal, Permission.APPLY_TRAFFIC_POLICY, action="mitigation.false_positive",
+                           details={"incident_id": incident_id})
+    if len((reason or "").strip()) < 5:
+        raise MitigationError("Give a reason of at least 5 characters.")
+    for row in rows:
+        if row["status"] == "active":
+            rollback(principal, row["id"], reason=text, now=now)
+        else:
+            reject(principal, row["id"], reason=text, now=now)
+    try:
+        incident_correlation_service.mark_false_positive(principal, incident_id, reason)
+    except incident_correlation_service.IncidentError as exc:
+        raise MitigationError(str(exc)) from exc
+
+
 # ------------------------------------------------------------------ reading
 
 JSON_FIELDS = ("assessment_json", "previous_allocation_json", "new_allocation_json", "before_json", "after_json",
@@ -793,6 +848,60 @@ def list_for_session(principal: Principal, session_id: int) -> List[Dict[str, An
     require_permission(principal, Permission.VIEW_DASHBOARD, action="mitigation.view")
     with database_service.session() as conn:
         return [_public(r) for r in repo.of_session(conn, session_id)]
+
+
+def list_for_incident(principal: Principal, incident_id: int) -> List[Dict[str, Any]]:
+    require_permission(principal, Permission.VIEW_ALERTS, action="mitigation.view")
+    with database_service.session() as conn:
+        return [_public(r) for r in repo.of_incident(conn, incident_id)]
+
+
+def list_recent_applied(principal: Principal, limit: int = 30) -> List[Dict[str, Any]]:
+    require_permission(principal, Permission.VIEW_DASHBOARD, action="mitigation.view")
+    with database_service.session() as conn:
+        return [_public(r) for r in repo.recent_applied(conn, limit)]
+
+
+def get_action(principal: Principal, mitigation_id: int) -> Dict[str, Any]:
+    require_permission(principal, Permission.VIEW_DASHBOARD, action="mitigation.view")
+    with database_service.session() as conn:
+        return _public(_load(conn, mitigation_id))
+
+
+def allocation_history(principal: Principal, session_id: int, limit: int = 300) -> List[Dict[str, Any]]:
+    """Oldest first: each interval's class shares, with what no class asked for as `available_bps`."""
+    require_permission(principal, Permission.VIEW_DASHBOARD, action="mitigation.view")
+    with database_service.session() as conn:
+        rows = repo.allocation_history(conn, session_id, limit)
+    return [{**json.loads(r["classes_json"]), "timestamp": r["timestamp"], "enforced": bool(r["enforced"])} for r in reversed(rows)]
+
+
+def host_rows(principal: Principal, session_id: int, hosts: Sequence[Any]) -> List[Dict[str, Any]]:
+    """The host table: each host's use with its allocation, status and what to do next.
+
+    Restricted means a mitigation is really limiting this host (a dry run does not count). Suspicious is a model verdict.
+    Allocated is None when there is no allocation, never 0.
+    """
+    require_permission(principal, Permission.VIEW_DASHBOARD, action="mitigation.view")
+    with database_service.session() as conn:
+        latest = repo.latest_allocation(conn, session_id)
+        actions = [dict(r) for r in repo.of_session(conn, session_id, repo.OPEN_STATUSES)]
+    grants = {h["host"]: h for h in json.loads(latest["hosts_json"])} if latest else {}
+    rows = []
+    for host in hosts:
+        mine = [a for a in actions if a["target"] == host.host]
+        active = next((a for a in mine if a["status"] == "active"), None)
+        dry_run = active is not None and active["adapter"] == DRY_RUN
+        status = "restricted" if active and not dry_run else host.status
+        grant = grants.get(host.host)
+        rows.append({"host": host.host, "kind": host.kind, "sent_bps": host.sent_bps, "received_bps": host.received_bps,
+                     "usage_bps": host.total_bps, "allocated_bps": None if grant is None else float(grant["allocated_bps"]),
+                     "has_allocation": latest is not None,
+                     "status": status, "dry_run": dry_run, "action": "Investigate" if status == "suspicious" else "Manage",
+                     "active_id": active["id"] if active else None, "incident_id": mine[0]["incident_id"] if mine else None,
+                     "flagged_flows": host.flagged_flows, "top_category": host.top_category,
+                     "active_connections": host.active_connections, "traffic": host.traffic})
+    return rows
 
 
 def enforcement_status(principal: Principal) -> enforcement_service.Capability:
