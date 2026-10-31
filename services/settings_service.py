@@ -5,9 +5,10 @@ Only administrators can change them; every change is audited with before/after.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from services import audit_service, database_service
 from services.authorization import Permission, Principal, require_permission
@@ -294,10 +295,18 @@ class MitigationSettings:
     critical_min_share: float = 0.20
     normal_min_share: float = 0.30
     suspicious_max_share: float = 0.10
+    critical_hosts: Tuple[str, ...] = ()  # carry critical traffic: top class, and too risky for the engine to limit alone
+    protected_hosts: Tuple[str, ...] = ()  # never proposed and never enforced on, for example your gateway
 
     def validate(self) -> "MitigationSettings":
         if self.policy not in MITIGATION_POLICIES:
             raise SettingsError("Choose Off, Recommend or Auto rate-limit.")
+        for name, hosts in (("Critical hosts", self.critical_hosts), ("Protected hosts", self.protected_hosts)):
+            for host in hosts:
+                try:
+                    ipaddress.ip_address(host)
+                except ValueError as exc:
+                    raise SettingsError(f"{name}: '{host}' is not a single IP address.") from exc
         if not 0 <= float(self.min_confidence) <= 1:
             raise SettingsError("Minimum confidence must be between 0 and 1.")
         if self.min_severity not in ("low", "medium", "high", "critical"):
@@ -330,8 +339,10 @@ def get_mitigation_settings() -> MitigationSettings:
         row = conn.execute("SELECT value_json FROM app_settings WHERE key = ?", (MITIGATION_KEY,)).fetchone()
     if row is None:
         return MitigationSettings()
-    stored = json.loads(row["value_json"])
-    return MitigationSettings(**{k: v for k, v in stored.items() if k in MitigationSettings.__dataclass_fields__}).validate()
+    stored = {k: v for k, v in json.loads(row["value_json"]).items() if k in MitigationSettings.__dataclass_fields__}
+    for key in ("critical_hosts", "protected_hosts"):
+        stored[key] = tuple(stored.get(key, ()))
+    return MitigationSettings(**stored).validate()
 
 
 def update_mitigation_settings(principal: Principal, new: MitigationSettings) -> MitigationSettings:

@@ -169,6 +169,8 @@ app.py (router: st.navigation; signed out, only the login page is registered)
 | `SMART_SHIELD_LOCKOUT_MAX_ATTEMPTS` / `_MINUTES` | `5` / `15` | Sign-in lockout |
 | `SMART_SHIELD_ALLOW_SELF_REGISTRATION` | `true` | Allow sign-up after the first admin |
 | `SMART_SHIELD_TC_ENABLED` / `_INTERFACES` / `_BINARY` | `false` / empty / `/sbin/tc` | Optional Linux traffic shaping |
+| `SMART_SHIELD_ENFORCEMENT_BACKEND` | `dry_run` | How approved mitigations are enforced: `dry_run` (changes nothing, shows the commands), `pf` (macOS, root) or `tc` (Linux, root or `CAP_NET_ADMIN`) |
+| `SMART_SHIELD_ENFORCEMENT_INTERFACES` / `_LAB_INTERFACES` | empty / empty | Interfaces a real backend may touch; interfaces marked as a lab, the only place isolation is allowed |
 
 Interfaces for live monitoring, the latency target and retention are configured in the app by an admin.
 
@@ -207,6 +209,7 @@ Interfaces for live monitoring, the latency target and retention are configured 
 - **Training speed:** models train inside the app process; a 200k-row run takes about a minute.
 - **Untested platforms:** Windows and Linux have not been run end to end. Development and verification were done on macOS.
 - **Enforcement dialog:** it needs Linux `tc`, so it is verified by tests with a mocked `tc`, not in a browser on macOS.
+- **Mitigation enforcement:** generated `pf` rules and `dnctl` commands pass the real parsers on macOS, and everything else is tested with a fake runner. Loading rules into a kernel needs root; prove it on your machine with `sudo .venv/bin/python -m scripts.manage enforcement-check --backend pf --interface en0 --install`. Limits outlive the app until the next start, a rollback or a reboot.
 - **Map clicks:** clicking a host on the Network Map uses Plotly selection events; the "Or pick a host" list under the
   map always works.
 - **Drift check:** models trained before the UI upgrade have no stored training distributions; retrain them once.

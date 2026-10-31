@@ -7,13 +7,13 @@ Policy levels (settings: mitigation.settings)
   false-positive risk all meet their thresholds. It always expires and can be rolled back.
 
 Blocking and isolation are never automatic, at any level: the engine can only propose them, and approving one needs an
-administrator, a reason, an expiry, and the target typed out. Isolation is limited to simulated links for now.
+administrator, a reason, an expiry, and the target typed out. On a real link, isolation also needs a lab interface.
 
 A congested link never starts anything here. Only flows flagged by the registered models do.
 
 Enforcement goes through an Enforcer chosen by origin. Simulation has its own: the simulated link reads the active
-mitigations each interval, so the effect is calculated by the link model and shown as simulated. Real networks have no
-enforcer yet (adapters arrive in phase M4), so approving one fails clearly and is recorded as failed.
+mitigations each interval, so the effect is calculated by the link model and shown as simulated. Real networks use
+enforcement_service: `tc`, `pf` + `dnctl`, or a dry run that changes nothing and is labelled so everywhere.
 
 The engine has no user: its actions are audited with no user id and `initiated_by = engine`.
 """
@@ -22,17 +22,24 @@ from __future__ import annotations
 import ipaddress
 import json
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Set
 
+from config import get_settings
 from repositories import incident_repository, mitigation_repository as repo
-from services import audit_service, database_service, host_allocation, mitigation_scoring, settings_service
+from services import (
+    audit_service, database_service, enforcement_service, host_allocation, mitigation_scoring, settings_service,
+    traffic_shaping_service,
+)
 from services.authorization import Permission, Principal, require_permission
 from services.bandwidth_allocation import AllocationError
+from services.enforcement_adapters import EnforcementError
+from services.enforcement_service import DRY_RUN, RealEnforcer
 from services.host_allocation import AllocationPolicy, HostAllocation, HostDemand
 from services.mitigation_scoring import Assessment, FlaggedFlow, Thresholds
 from services.settings_service import MitigationSettings
+from services.traffic_shaping_service import ShapingError
 from services.timeutil import parse_iso, to_iso, utc_now
 
 ACTION_TYPES = ("rate_limit", "prioritize", "block", "isolate")
@@ -52,14 +59,10 @@ class MitigationError(Exception):
     pass
 
 
-class EnforcementError(Exception):
-    pass
-
-
 class Enforcer(Protocol):
     name: str
 
-    def apply(self, mitigation: Mapping[str, Any]) -> None: ...
+    def apply(self, mitigation: Mapping[str, Any]) -> Optional[List[Dict[str, Any]]]: ...  # the commands, if any
 
     def remove(self, mitigation: Mapping[str, Any]) -> None: ...
 
@@ -75,21 +78,11 @@ class SimulatedEnforcer:
         pass
 
 
-class NoRealEnforcer:
-    name = "none"
-
-    def apply(self, mitigation: Mapping[str, Any]) -> None:
-        raise EnforcementError("No enforcement backend is available for real networks yet, so nothing was changed.")
-
-    def remove(self, mitigation: Mapping[str, Any]) -> None:
-        pass
-
-
-_enforcers: Dict[str, Enforcer] = {"simulation": SimulatedEnforcer(), "real": NoRealEnforcer()}
+_enforcers: Dict[str, Enforcer] = {"simulation": SimulatedEnforcer(), "real": RealEnforcer()}
 
 
 def set_enforcer_for_tests(origin: str, enforcer: Optional[Enforcer]) -> None:
-    _enforcers[origin] = enforcer or (SimulatedEnforcer() if origin == "simulation" else NoRealEnforcer())
+    _enforcers[origin] = enforcer or (SimulatedEnforcer() if origin == "simulation" else RealEnforcer())
 
 
 # ------------------------------------------------------------------ what a link should do this interval
@@ -138,6 +131,8 @@ def _policy_from(active: Sequence[Mapping[str, Any]]) -> LinkPolicy:
     blocked: Set[str] = set()
     isolated: Set[str] = set()
     for m in active:
+        if m["adapter"] == DRY_RUN:  # a dry run changed nothing, so it must not look like a limit
+            continue
         if m["action_type"] == "rate_limit":
             (source_limits if m["target_kind"] == "source" else destination_limits)[m["target"]] = float(m["limit_bps"])
         elif m["action_type"] == "block":
@@ -193,7 +188,7 @@ def plan_interval(session_id: int, capacity_bps: float, demands: Sequence[Sender
     policy = _policy_from(active)
     allocation = host_allocation.allocate_hosts(capacity_bps, _allocation_policy(settings),
                                                 classify_demands(demands, policy, flagged))
-    if any(m["action_type"] == "prioritize" for m in active):
+    if any(m["action_type"] == "prioritize" and m["adapter"] != DRY_RUN for m in active):
         policy = LinkPolicy(policy.source_limits, policy.destination_limits, policy.blocked, policy.isolated,
                             {h.host: float(h.allocated_bps) for h in allocation.hosts.values()})
     return IntervalPlan(policy, allocation)
@@ -214,9 +209,30 @@ def record_interval(session_id: int, plan: IntervalPlan, hosts: Sequence[Mapping
             conn, session_id=session_id, timestamp=to_iso(now), capacity_bps=plan.allocation.capacity_bps,
             enforced=plan.policy.enforcing, classes_json=json.dumps(summary, sort_keys=True),
             hosts_json=json.dumps([asdict(h) for h in plan.allocation.hosts.values()], sort_keys=True))
+    _after_interval(session_id, plan.allocation.capacity_bps, hosts, critical_hosts, now)
+
+
+def _after_interval(session_id: int, capacity_bps: Optional[float], hosts: Sequence[Mapping[str, Any]],
+                    critical_hosts: Set[str], now: datetime) -> None:
     _verify_due(session_id, now)
-    _evaluate(session_id, plan, hosts, critical_hosts, now)
+    _evaluate(session_id, capacity_bps, hosts, critical_hosts, now)
     _link_incidents(session_id, now)
+
+
+def run_live_interval(session_id: int, capacity_bps: Optional[float], hosts: Sequence[Mapping[str, Any]], now: datetime) -> None:
+    """One interval of a live capture. Without a configured capacity there is no allocation, and nothing is invented:
+    threats are still assessed, and a limit is proposed from the host's measured rate alone."""
+    critical = set(settings_service.get_mitigation_settings().critical_hosts)
+    if not capacity_bps:
+        expire_due(now)
+        _after_interval(session_id, None, hosts, critical, now)
+        return
+    with database_service.session() as conn:
+        receivers = repo.top_receivers_since(conn, session_id, to_iso(now - timedelta(seconds=ASSESS_WINDOW_SECONDS)))
+    demands = [SenderDemand(h["host"], receivers.get(h["host"], ""),
+                            host_allocation.CRITICAL if h["host"] in critical else host_allocation.NORMAL, float(h["sent_bps"]))
+               for h in hosts]
+    record_interval(session_id, plan_interval(session_id, capacity_bps, demands, now), hosts, critical, now)
 
 
 # ------------------------------------------------------------------ the engine's decisions
@@ -230,12 +246,15 @@ def _flagged_flows(rows: Sequence[Mapping[str, Any]]) -> List[FlaggedFlow]:
     return flows
 
 
-def _proposed_limit(assessment: Assessment, capacity_bps: float, settings: MitigationSettings) -> float:
-    """The configured share of the link, or half the current rate if that is lower, since a limit above it does nothing."""
-    limit = capacity_bps * settings.rate_limit_share
+def _proposed_limit(assessment: Assessment, capacity_bps: Optional[float], settings: MitigationSettings) -> Optional[float]:
+    """The configured share of the link, or half the current rate if that is lower, since a limit above it does nothing.
+    None when neither is known: there is nothing to base a limit on."""
+    options = []
+    if capacity_bps:
+        options.append(capacity_bps * settings.rate_limit_share)
     if assessment.traffic_bps:
-        limit = min(limit, assessment.traffic_bps / 2)
-    return max(MIN_LIMIT_BPS, limit)
+        options.append(assessment.traffic_bps / 2)
+    return max(MIN_LIMIT_BPS, min(options)) if options else None
 
 
 def _reason_for(a: Assessment) -> str:
@@ -243,7 +262,7 @@ def _reason_for(a: Assessment) -> str:
     return (f"{a.flagged_flows} flow(s) from {who} flagged as '{a.category}' in {a.repetition} window(s).")[:500]
 
 
-def _evaluate(session_id: int, plan: IntervalPlan, hosts: Sequence[Mapping[str, Any]], critical_hosts: Set[str],
+def _evaluate(session_id: int, capacity_bps: Optional[float], hosts: Sequence[Mapping[str, Any]], critical_hosts: Set[str],
               now: datetime) -> None:
     settings = settings_service.get_mitigation_settings()
     if settings.policy == "off":
@@ -258,8 +277,12 @@ def _evaluate(session_id: int, plan: IntervalPlan, hosts: Sequence[Mapping[str, 
     sent = {h["host"]: float(h["sent_bps"]) for h in hosts}
     received = {h["host"]: float(h["received_bps"]) for h in hosts}
     assessments = mitigation_scoring.assess_targets(_flagged_flows(flagged), totals, sent, received,
-                                                    plan.allocation.capacity_bps, critical_hosts, _thresholds(settings))
+                                                    capacity_bps, critical_hosts, _thresholds(settings))
     for assessment in assessments:
+        if assessment.target in settings.protected_hosts:
+            continue
+        if assessment.recommended_action == "rate_limit" and _proposed_limit(assessment, capacity_bps, settings) is None:
+            continue
         with database_service.session(write=True) as conn:
             existing = repo.open_for_target(conn, session_id, assessment.target_kind, assessment.target)
             if existing:
@@ -274,7 +297,7 @@ def _evaluate(session_id: int, plan: IntervalPlan, hosts: Sequence[Mapping[str, 
                 refused = repo.last_refused(conn, session_id, assessment.target_kind, assessment.target)
                 if refused is not None and _within_cooldown(refused, now):
                     continue
-                mitigation_id = _insert_proposal(conn, session_id, origin, assessment, plan.allocation.capacity_bps, settings, now)
+                mitigation_id = _insert_proposal(conn, session_id, origin, assessment, capacity_bps, settings, now)
         if settings.policy == "auto_rate_limit" and assessment.auto_eligible:
             _apply_automatically(mitigation_id, now)
 
@@ -291,7 +314,7 @@ def _evidence_values(a: Assessment) -> Dict[str, Any]:
             "assessment_json": json.dumps(a.as_dict(), sort_keys=True), "upstream_required": int(a.upstream_required)}
 
 
-def _insert_proposal(conn, session_id: int, origin: str, a: Assessment, capacity_bps: float, settings: MitigationSettings,
+def _insert_proposal(conn, session_id: int, origin: str, a: Assessment, capacity_bps: Optional[float], settings: MitigationSettings,
                      now: datetime) -> int:
     action = a.recommended_action
     mitigation_id = repo.insert(conn, {
@@ -324,6 +347,11 @@ def _session_origin(conn, session_id: int) -> str:
     if row is None:
         raise MitigationError("That monitoring session no longer exists.")
     return "simulation" if row["source_type"] == "simulation" else "real"
+
+
+def _session_interface(conn, session_id: Optional[int]) -> Optional[str]:
+    row = conn.execute("SELECT source_type, interface_name FROM monitoring_sessions WHERE id = ?", (session_id,)).fetchone()
+    return row["interface_name"] if row is not None and row["source_type"] == "live_capture" else None
 
 
 def _condition(conn, session_id: int, start: datetime, end: datetime, target_kind: str, target: str,
@@ -384,24 +412,30 @@ def _allocations_around(conn, row: Mapping[str, Any]) -> tuple:
 
 def _apply(row: Dict[str, Any], *, decided_by: Optional[int], note: str, now: datetime) -> Dict[str, Any]:
     enforcer = _enforcers[row["origin"]]
+    with database_service.session() as conn:
+        row["interface_name"] = _session_interface(conn, row["session_id"])
     started = time.perf_counter()
     failure: Optional[str] = None
+    commands = None
+    adapter = enforcer.name  # read once: the same answer goes in the record as was used to act
     try:
-        enforcer.apply(row)
+        commands = enforcer.apply(row)
     except EnforcementError as exc:
         failure = str(exc)[:500]
     elapsed_ms = (time.perf_counter() - started) * 1000
+    dry_run = adapter == DRY_RUN
+    enforcement = {"adapter": adapter, "execution_ms": elapsed_ms, "interface_name": row["interface_name"],
+                   "commands_json": json.dumps(commands) if commands else None}
     expires = now + timedelta(seconds=int(row["duration_seconds"]))
     with database_service.session(write=True) as conn:
         current = repo.get(conn, row["id"])
         if current is None or current["status"] != "proposed":  # someone else decided first: undo ours
             if failure is None:
-                enforcer.remove(row)
+                enforcer.remove({**row, "adapter": adapter})
             raise MitigationError("This action was already decided.")
         if failure is not None:
             repo.update(conn, row["id"], {"status": "failed", "failure_reason": failure, "decided_at": to_iso(now),
-                                          "decided_by": decided_by, "decision_note": note[:500], "adapter": enforcer.name,
-                                          "execution_ms": elapsed_ms})
+                                          "decided_by": decided_by, "decision_note": note[:500], **enforcement})
             audit_service.record(conn, user_id=decided_by, action="mitigation.apply", outcome="failure",
                                  details={"mitigation_id": row["id"], "error": failure})
             _note_incident(conn, row, f"Mitigation #{row['id']} failed: {failure}", decided_by, now)
@@ -413,8 +447,9 @@ def _apply(row: Dict[str, Any], *, decided_by: Optional[int], note: str, now: da
             previous, new = _allocations_around(conn, row)
             repo.update(conn, row["id"], {
                 "status": "active", "decided_at": to_iso(now), "decided_by": decided_by, "decision_note": note[:500],
-                "applied_at": to_iso(now), "expires_at": to_iso(expires), "adapter": enforcer.name,
-                "execution_ms": elapsed_ms, "recovery_status": "pending",
+                "applied_at": to_iso(now), "expires_at": to_iso(expires), **enforcement,
+                "recovery_status": "not_applied" if dry_run else "pending",
+                "recovery_note": "Dry run: nothing was changed on the network, so there is nothing to measure." if dry_run else None,
                 "before_json": json.dumps(before, sort_keys=True) if before else None,
                 "previous_allocation_json": json.dumps(previous, sort_keys=True) if previous else None,
                 "new_allocation_json": json.dumps(new, sort_keys=True) if new else None})
@@ -422,8 +457,9 @@ def _apply(row: Dict[str, Any], *, decided_by: Optional[int], note: str, now: da
                                  details={"mitigation_id": row["id"], "action": row["action_type"], "target": row["target"],
                                           "limit_bps": row["limit_bps"], "expires_at": to_iso(expires),
                                           "initiated_by": row["initiated_by"], "automatic": decided_by is None,
-                                          "adapter": enforcer.name})
-            _note_incident(conn, row, f"Mitigation #{row['id']} applied: {describe(row)}.", decided_by, now)
+                                          "adapter": adapter, "interface": row["interface_name"], "commands": commands})
+            verb = "dry run only, nothing changed" if dry_run else "applied"
+            _note_incident(conn, row, f"Mitigation #{row['id']} {verb}: {describe(row)}.", decided_by, now)
         return dict(repo.get(conn, row["id"]))
 
 
@@ -446,6 +482,21 @@ def _end(row: Mapping[str, Any], *, status: str, user_id: Optional[int], reason:
             _note_incident(conn, row, f"Mitigation #{row['id']} ended ({status.replace('_', ' ')}): {reason}", user_id, now)
 
 
+def _end_or_keep(row: Mapping[str, Any], *, status: str, user_id: Optional[int], reason: str, now: datetime, action: str) -> bool:
+    """For ends nobody is waiting on. A removal that fails leaves the action active, on show, and retried next time."""
+    try:
+        _end(row, status=status, user_id=user_id, reason=reason, now=now, action=action)
+        return True
+    except EnforcementError as exc:
+        message = f"Could not be removed: {exc}"[:500]
+        with database_service.session(write=True) as conn:
+            if row.get("failure_reason") != message:  # one audit row per problem, not one per retry
+                repo.update(conn, row["id"], {"failure_reason": message})
+                audit_service.record(conn, user_id=user_id, action=action, outcome="failure",
+                                     details={"mitigation_id": row["id"], "error": message})
+        return False
+
+
 def expire_due(now: datetime) -> int:
     """End every active action past its expiry and every proposal nobody answered in time."""
     cutoff = to_iso(now - timedelta(seconds=PROPOSAL_TTL_SECONDS))
@@ -455,7 +506,7 @@ def expire_due(now: datetime) -> int:
             "OR (status = 'proposed' AND created_at <= ?)", (to_iso(now), cutoff)).fetchall()]
     for row in due:
         reason = "Its time limit ended." if row["status"] == "active" else "Nobody answered this proposal in time."
-        _end(row, status="expired", user_id=None, reason=reason, now=now, action="mitigation.expire")
+        _end_or_keep(row, status="expired", user_id=None, reason=reason, now=now, action="mitigation.expire")
     return len(due)
 
 
@@ -465,18 +516,19 @@ def end_session(session_id: int, reason: str, now: Optional[datetime] = None) ->
     with database_service.session() as conn:
         rows = [dict(r) for r in repo.of_session(conn, session_id, repo.OPEN_STATUSES)]
     for row in rows:
-        _end(row, status="ended", user_id=None, reason=reason, now=moment, action="mitigation.end")
+        _end_or_keep(row, status="ended", user_id=None, reason=reason, now=moment, action="mitigation.end")
 
 
 def close_orphans() -> int:
-    """After a restart nothing enforces the actions of sessions that stopped with the old process, so close them."""
+    """After a restart nothing watches the actions of sessions that stopped with the old process, so close them.
+    Limits on a real link outlive the process, so this also removes them from the kernel if it can."""
     moment = utc_now()
     with database_service.session() as conn:
         rows = [dict(r) for r in conn.execute(
             "SELECT m.* FROM mitigation_actions m LEFT JOIN monitoring_sessions s ON s.id = m.session_id "
             "WHERE m.status IN ('proposed', 'active') AND (s.id IS NULL OR s.status <> 'RUNNING')").fetchall()]
     for row in rows:
-        _end(row, status="ended", user_id=None, reason="Its session is no longer running.", now=moment, action="mitigation.end")
+        _end_or_keep(row, status="ended", user_id=None, reason="Its session is no longer running.", now=moment, action="mitigation.end")
     return len(rows)
 
 
@@ -492,6 +544,9 @@ def _verify_due(session_id: int, now: datetime) -> None:
                                row["target"], row["action_type"])
             before = json.loads(row["before_json"]) if row["before_json"] else {}
             status, note = mitigation_scoring.verify_recovery(row["action_type"], before, after, row["limit_bps"])
+            if row["origin"] == "real" and not enforcement_service.measurable_after_enforcement(row["target_kind"], row["target"]):
+                status, note = "unavailable", ("The rule is installed, but capture sees incoming packets before it acts, "
+                                               "so its effect on this traffic cannot be measured here.")
             values: Dict[str, Any] = {"after_json": json.dumps(after, sort_keys=True), "recovery_status": status,
                                       "recovery_note": note[:500]}
             if "upstream" in note:
@@ -573,7 +628,11 @@ def _check_high_impact(row: Mapping[str, Any], confirm_target: Optional[str]) ->
     if (confirm_target or "").strip() != row["target"]:
         raise MitigationError(f"Type the address {row['target']} to confirm this action.")
     if row["action_type"] == "isolate" and row["origin"] != "simulation":
-        raise MitigationError("Host isolation is only available on a simulated link.")
+        with database_service.session() as conn:
+            interface = _session_interface(conn, row["session_id"])
+        if not enforcement_service.isolation_allowed(interface):
+            raise MitigationError("Host isolation on a real link needs an interface marked as a lab network "
+                                  "(SMART_SHIELD_ENFORCEMENT_LAB_INTERFACES).")
 
 
 def _check_session_running(row: Mapping[str, Any]) -> None:
@@ -688,9 +747,38 @@ def request_action(principal: Principal, session_id: int, action_type: str, *, t
     return _apply(fresh, decided_by=principal.user_id, note=text, now=moment)
 
 
+def emergency_disable(principal: Principal, *, reason: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Everything off at once: the engine is set to Off so it cannot re-apply, then every limit and block is removed,
+    on all backends, including class policies from traffic_shaping_service. Failures are reported, never hidden."""
+    require_permission(principal, Permission.APPLY_TRAFFIC_POLICY, action="mitigation.emergency_disable")
+    text = _validated_reason(reason)
+    moment = now or utc_now()
+    settings_service.update_mitigation_settings(principal, replace(settings_service.get_mitigation_settings(), policy="off"))
+    failures = list(_enforcers["real"].clear()) if hasattr(_enforcers["real"], "clear") else []
+    with database_service.session() as conn:
+        rows = [dict(r) for r in repo.all_active(conn)]
+    ended = 0
+    for row in rows:
+        if _end_or_keep(row, status="rolled_back", user_id=principal.user_id, reason=f"Emergency disable: {text}", now=moment,
+                        action="mitigation.rollback"):
+            ended += 1
+        else:
+            failures.append(f"Mitigation #{row['id']} could not be removed.")
+    if get_settings().tc_enabled:
+        try:
+            traffic_shaping_service.emergency_disable(principal)
+        except ShapingError as exc:
+            failures.append(f"Class shaping: {exc}")
+    audit_service.record_standalone(user_id=principal.user_id, action="mitigation.emergency_disable",
+                                    outcome="failure" if failures else "success",
+                                    details={"ended": ended, "failures": failures[:10], "reason": text[:200]})
+    return {"ended": ended, "failures": failures}
+
+
 # ------------------------------------------------------------------ reading
 
-JSON_FIELDS = ("assessment_json", "previous_allocation_json", "new_allocation_json", "before_json", "after_json")
+JSON_FIELDS = ("assessment_json", "previous_allocation_json", "new_allocation_json", "before_json", "after_json",
+               "commands_json")
 
 
 def _public(row: Mapping[str, Any]) -> Dict[str, Any]:
@@ -705,6 +793,17 @@ def list_for_session(principal: Principal, session_id: int) -> List[Dict[str, An
     require_permission(principal, Permission.VIEW_DASHBOARD, action="mitigation.view")
     with database_service.session() as conn:
         return [_public(r) for r in repo.of_session(conn, session_id)]
+
+
+def enforcement_status(principal: Principal) -> enforcement_service.Capability:
+    require_permission(principal, Permission.VIEW_DASHBOARD, action="mitigation.view")
+    return enforcement_service.capability()
+
+
+def list_active_real(principal: Principal) -> List[Dict[str, Any]]:
+    require_permission(principal, Permission.VIEW_DASHBOARD, action="mitigation.view")
+    with database_service.session() as conn:
+        return [_public(r) for r in repo.active_real(conn)]
 
 
 def latest_allocation(principal: Principal, session_id: int) -> Optional[Dict[str, Any]]:

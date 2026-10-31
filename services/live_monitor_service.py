@@ -33,19 +33,20 @@ import pandas as pd
 
 from repositories import monitoring_repository, telemetry_repository
 from services import (
-    alert_service, audit_service, capture_worker, database_service, model_registry_service, monitoring_service,
-    settings_service,
+    alert_service, audit_service, capture_worker, database_service, mitigation_service, model_registry_service,
+    monitoring_service, settings_service,
 )
 from services.authorization import Permission, Principal, require_permission
 from services.flow_extractor import ACTIVE_TIMEOUT_S, IDLE_TIMEOUT_S
 from services.intrusion_features import LIVE_FLOW_FEATURES
 from services.monitoring_service import SessionState, SourceType
-from services.timeutil import utc_now_iso
+from services.timeutil import parse_iso, utc_now, utc_now_iso
 
 QUEUE_MAX = 2_000
 FLUSH_SECONDS = 2.0
 JOIN_TIMEOUT_SECONDS = 5.0
 LIVE_ALERT_COOLDOWN_MINUTES = 15
+EXPIRY_CHECK_SECONDS = 5.0
 MODES = {"counters": "Interface counters (no special permission)",
          "packets": "Counters + passive packet capture and flow analysis (needs capture permission)"}
 
@@ -123,6 +124,7 @@ class LiveStatus:
     active_flows: Optional[int] = None
     detection: Dict[str, Any] = field(default_factory=dict)
     last_error: Optional[str] = None
+    engine_error: Optional[str] = None
 
 
 class LiveMonitor:
@@ -226,6 +228,7 @@ class LiveMonitor:
                 self._set_state(SessionState.STOPPED, f"{reason}. {self.status.samples} samples, "
                                                       f"{self.status.flows_stored} flows stored.")
             self.status.running = False
+        self._end_mitigations("The capture stopped.")
         if principal is not None:
             audit_service.record_standalone(user_id=principal.user_id, action="monitoring.stop", outcome="success",
                                             details={"session_id": session_id, "samples": self.status.samples,
@@ -312,11 +315,12 @@ class LiveMonitor:
                 except Exception:
                     self.status.state = SessionState.ERROR.value
                 self.status.running = False
+            self._end_mitigations("The capture stopped because of an error.")
 
     def _consume_loop(self) -> None:
         metrics: List[Dict[str, Any]] = []
         flows: List[Dict[str, Any]] = []
-        last_flush = time.monotonic()
+        last_flush = last_expiry = time.monotonic()
         worker_done = False
         while True:
             try:
@@ -353,6 +357,9 @@ class LiveMonitor:
                 self._flush(metrics, flows)
                 metrics, flows = [], []
                 last_flush = time.monotonic()
+            if time.monotonic() - last_expiry >= EXPIRY_CHECK_SECONDS:  # expiry must not depend on packets arriving
+                self._engine(lambda: mitigation_service.expire_due(utc_now()))
+                last_expiry = time.monotonic()
             if worker_done or (self._consumer_stop.is_set() and self._queue_empty()):
                 break
             if not self._worker_alive() and self._queue_empty() and self.status.state in ("STARTING", "RUNNING"):
@@ -362,8 +369,33 @@ class LiveMonitor:
         if metrics or flows:
             self._flush(metrics, flows)
         with self._lock:
-            if self.status.state == "ERROR":
+            ended = self.status.state == "ERROR"
+            if ended:
                 self.status.running = False
+        if ended:
+            self._end_mitigations("The capture stopped because of an error.")
+
+    def _engine(self, call: Callable[[], Any]) -> None:
+        """A mitigation problem must not stop monitoring: it is shown in the status, and capture carries on."""
+        try:
+            call()
+            self.status.engine_error = None
+        except Exception as exc:
+            self.status.engine_error = f"{type(exc).__name__}: {exc}"[:500]
+
+    def _end_mitigations(self, reason: str) -> None:
+        session_id = self.status.session_id
+        if session_id is not None:
+            self._engine(lambda: mitigation_service.end_session(session_id, reason))
+
+    def _run_engine(self, metrics: List[Dict[str, Any]]) -> None:
+        """Only a capture that can see hosts and has a model to judge flows has anything for the engine to look at."""
+        newest = next((m for m in reversed(metrics) if m.get("hosts")), None)
+        if newest is None or not (self._detector or {}).get("enabled"):
+            return
+        session_id = self.status.session_id
+        self._engine(lambda: mitigation_service.run_live_interval(session_id, self._capacity, newest["hosts"],
+                                                                  parse_iso(newest["at"])))
 
     def _queue_empty(self) -> bool:
         try:
@@ -426,6 +458,7 @@ class LiveMonitor:
         self.status.flows_not_stored += len(skipped)
         self.status.flows_scored += sum(1 for v in verdicts if v)
         self.status.flagged += sum(1 for v in verdicts if v.get("category"))
+        self._run_engine(metrics)
 
     def _raise_alerts(self, conn, flows: List[Dict[str, Any]], verdicts: List[Dict[str, Any]]) -> None:
         groups: Dict[str, List[int]] = {}

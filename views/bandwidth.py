@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from components import live_network, waterfill
+from components import enforcement_panel, live_network, waterfill
 from components.guard import require_principal
 from components.theme import COLORS, apply_chart_theme
 from components.ui import format_bits_rate, format_timestamp, kpi_tile, page_header, section_label
@@ -35,6 +35,7 @@ live_tab, policy_tab, recommend_tab, history_tab, enforce_tab = st.tabs(
 
 with live_tab:
     live_network.render(principal)
+    enforcement_panel.render_live(principal)
 
 # ------------------------------------------------------------------ policies
 with policy_tab:
@@ -292,6 +293,8 @@ def _revert_dialog(interface: str) -> None:
 with enforce_tab:
     if APPLIED_TOAST_KEY in st.session_state:
         st.toast(st.session_state.pop(APPLIED_TOAST_KEY), icon=":material/check_circle:")
+    enforcement_panel.render(principal)
+    section_label("Class policies (Linux tc)")
     state = traffic_shaping_service.availability()
     usable = can_enforce and state.available
     why_disabled = ADMIN_ONLY if not can_enforce else (None if state.available else "Enforcement is not available "

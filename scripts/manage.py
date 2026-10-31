@@ -5,6 +5,7 @@
     python -m scripts.manage reset-password --email EMAIL
     python -m scripts.manage apply-retention [--dry-run]
     python -m scripts.manage dump-schema [--check]
+    python -m scripts.manage enforcement-check --backend pf|tc --interface NAME [--install]
 
 Passwords are only read interactively (never from arguments, which end up in
 shell history).
@@ -110,6 +111,24 @@ def cmd_dump_schema(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_enforcement_check(args: argparse.Namespace) -> int:
+    from repositories import mitigation_repository
+    from services import enforcement_service
+    from services.enforcement_adapters import EnforcementError
+
+    if args.install:  # the check rewrites the same pf anchor that real limits use
+        database_service.run_migrations()
+        with database_service.session() as conn:
+            if mitigation_repository.active_real(conn):
+                print("Real mitigations are active. Roll them back first, because this check would replace them.", file=sys.stderr)
+                return 1
+    try:
+        return 0 if enforcement_service.self_check(args.backend, args.interface, install=args.install) else 1
+    except EnforcementError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m scripts.manage", description="Smart Shield operator commands")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -127,6 +146,11 @@ def build_parser() -> argparse.ArgumentParser:
     dump = sub.add_parser("dump-schema", help="regenerate database/schema.sql from the migrations")
     dump.add_argument("--check", action="store_true", help="exit 1 if schema.sql is out of date")
     dump.set_defaults(func=cmd_dump_schema)
+    check = sub.add_parser("enforcement-check", help="show, or with --install try, a backend on a reserved test address")
+    check.add_argument("--backend", required=True, choices=("pf", "tc"))
+    check.add_argument("--interface", required=True)
+    check.add_argument("--install", action="store_true", help="really install and remove the test rules (needs root)")
+    check.set_defaults(func=cmd_enforcement_check)
     return parser
 
 

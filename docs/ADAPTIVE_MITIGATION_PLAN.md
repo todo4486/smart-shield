@@ -1,6 +1,6 @@
 # Adaptive Bandwidth Allocation & Automated Threat Mitigation: review and plan
 
-Status: **approved 2026-10-30; M1, M2 and M3 done, M4 next.** Decisions are recorded in section 6.
+Status: **approved 2026-10-30; M1, M2, M3 and M4 done, M5 next.** Decisions are recorded in section 6.
 
 ## 1. The project today
 
@@ -133,3 +133,28 @@ app.py (st.navigation router; signed out = login page only)
     actions link to the incident and add notes to it.
   - Verified in real time on a copy of the real database with the live-compatible model (see the M3 report); that says
     nothing about accuracy on a real network, since the model was trained on the synthetic sample.
+- **M4 (enforcement adapters), done.** `services/enforcement_adapters.py` (fixed command plans), `services/enforcement_service.py`
+  (capability detection, running commands, self-check), `components/enforcement_panel.py`, migration `013`
+  (`interface_name`, `commands_json`), `mitigation_service.run_live_interval` and `emergency_disable`,
+  `python -m scripts.manage enforcement-check`.
+  - The backend is set only in the server's environment and defaults to `dry_run`. A backend that cannot work here stays
+    in dry run and says why. A dry-run action is labelled everywhere, never counts as a limit in the allocation, and is
+    never checked for recovery.
+  - `tc` uses a clsact qdisc with flower filters, so it sits beside a class policy on the root qdisc. It polices (drops)
+    rather than queues.
+  - `pf` uses the anchor `com.apple/smart_shield`, which the default `/etc/pf.conf` already evaluates, plus a dummynet pipe
+    per limit. It reloads the anchor to change it and never flushes, so the main ruleset is never touched.
+  - Live capture now feeds the engine when it runs in packets mode with a live-compatible active model. With no configured
+    capacity there is no allocation, and a limit is proposed from the measured rate alone.
+  - Refused for every backend: loopback, multicast and unspecified addresses, protected hosts, and blocking or isolating this
+    machine. Isolation needs a lab interface. Prioritizing by class is not available on a real link: it would rewrite per-host
+    limits every interval, so class policies remain the way to do that.
+  - Capture sees incoming packets before pf or tc acts on them. So recovery on a real link is only judged for traffic leaving
+    this machine; for incoming traffic it reports `unavailable` instead of a false "not recovered".
+  - Verified: the generated rules and dnctl command pass the real `pfctl -n` and `dnctl -n` parsers on this Mac (tests). That
+    found one real error: pf refuses a dummynet rule with no direction.
+  - **Not verified:** no rule has been loaded into a real kernel on either OS, because that needs root. `tc` commands have only
+    run against a fake, since this Mac has no `tc`. `enforcement-check --install` is the way to prove pf or tc on a real machine.
+  - Limits live in the kernel, so if the app is killed they stay until the next start, a rollback or a reboot; expiry only runs
+    while the app runs. Live alerts are not correlated into incidents automatically, so live actions link to an incident only
+    after correlation has been run: M5.

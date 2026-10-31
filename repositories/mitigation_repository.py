@@ -18,7 +18,7 @@ UPDATABLE = frozenset({
     "before_json", "after_json", "recovery_status", "recovery_note", "adapter", "execution_ms", "failure_reason",
     "decided_at", "decided_by", "decision_note", "applied_at", "expires_at", "ended_at", "ended_by", "end_reason",
     "upstream_required", "severity", "confidence", "confidence_basis", "false_positive_risk", "repetition", "flagged_flows",
-    "traffic_bps", "assessment_json",
+    "traffic_bps", "assessment_json", "interface_name", "commands_json",
 })
 
 
@@ -44,6 +44,19 @@ def of_session(conn: sqlite3.Connection, session_id: int, statuses: Optional[Seq
 
 def recent(conn: sqlite3.Connection, limit: int = 100) -> List[sqlite3.Row]:
     return conn.execute("SELECT * FROM mitigation_actions ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+
+def active_with_adapter(conn: sqlite3.Connection, adapter: str) -> List[sqlite3.Row]:
+    return conn.execute("SELECT * FROM mitigation_actions WHERE status = 'active' AND adapter = ? ORDER BY id",
+                        (adapter,)).fetchall()
+
+
+def active_real(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    return conn.execute("SELECT * FROM mitigation_actions WHERE status = 'active' AND origin = 'real' ORDER BY id").fetchall()
+
+
+def all_active(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    return conn.execute("SELECT * FROM mitigation_actions WHERE status = 'active' ORDER BY id").fetchall()
 
 
 def open_for_target(conn: sqlite3.Connection, session_id: int, target_kind: str, target: str) -> List[sqlite3.Row]:
@@ -78,6 +91,18 @@ def flow_totals_since(conn: sqlite3.Connection, session_id: int, since: str) -> 
     rows = conn.execute("SELECT src_ip, COUNT(*) AS flows FROM network_flows WHERE session_id = ? AND timestamp >= ? "
                         "AND src_ip IS NOT NULL GROUP BY src_ip", (session_id, since)).fetchall()
     return {r["src_ip"]: int(r["flows"]) for r in rows}
+
+
+def top_receivers_since(conn: sqlite3.Connection, session_id: int, since: str) -> Dict[str, str]:
+    """Each source's busiest destination among its recent finished flows."""
+    rows = conn.execute(
+        "SELECT src_ip, dst_ip, SUM(COALESCE(byte_count, 0)) AS volume FROM network_flows WHERE session_id = ? AND timestamp >= ? "
+        "AND src_ip IS NOT NULL AND dst_ip IS NOT NULL GROUP BY src_ip, dst_ip ORDER BY src_ip, volume DESC, dst_ip",
+        (session_id, since)).fetchall()
+    top: Dict[str, str] = {}
+    for row in rows:
+        top.setdefault(row["src_ip"], row["dst_ip"])
+    return top
 
 
 def metrics_between(conn: sqlite3.Connection, session_id: int, start: str, end: str) -> List[sqlite3.Row]:

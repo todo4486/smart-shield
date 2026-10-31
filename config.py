@@ -20,6 +20,7 @@ ASSETS_DIR = PROJECT_ROOT / "assets"
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+VALID_ENFORCEMENT_BACKENDS = ("dry_run", "tc", "pf")
 
 
 class ConfigError(ValueError):
@@ -34,6 +35,9 @@ class Settings:
     tc_enabled: bool
     tc_interfaces: tuple
     tc_binary: str
+    enforcement_backend: str
+    enforcement_interfaces: tuple
+    enforcement_lab_interfaces: tuple
     session_idle_minutes: int
     lockout_max_attempts: int
     lockout_minutes: int
@@ -74,10 +78,17 @@ def _path_setting(name: str, default: str) -> Path:
     return path
 
 
+def _list_setting(name: str) -> tuple:
+    return tuple(i.strip() for i in os.environ.get(name, "").split(",") if i.strip())
+
+
 def get_settings() -> Settings:
     log_level = os.environ.get("SMART_SHIELD_LOG_LEVEL", "INFO").strip().upper() or "INFO"
     if log_level not in VALID_LOG_LEVELS:
         raise ConfigError(f"SMART_SHIELD_LOG_LEVEL must be one of {VALID_LOG_LEVELS}, got {log_level!r}")
+    backend = os.environ.get("SMART_SHIELD_ENFORCEMENT_BACKEND", "dry_run").strip().lower() or "dry_run"
+    if backend not in VALID_ENFORCEMENT_BACKENDS:
+        raise ConfigError(f"SMART_SHIELD_ENFORCEMENT_BACKEND must be one of {VALID_ENFORCEMENT_BACKENDS}, got {backend!r}")
     return Settings(
         db_path=_path_setting("SMART_SHIELD_DB_PATH", "data/smart_shield.db"),
         dataset_dir=_path_setting("SMART_SHIELD_DATASET_DIR", "data/datasets"),
@@ -85,6 +96,9 @@ def get_settings() -> Settings:
         tc_enabled=_bool_setting("SMART_SHIELD_TC_ENABLED", False),
         tc_interfaces=tuple(i.strip() for i in os.environ.get("SMART_SHIELD_TC_INTERFACES", "").split(",") if i.strip()),
         tc_binary=os.environ.get("SMART_SHIELD_TC_BINARY", "/sbin/tc").strip() or "/sbin/tc",
+        enforcement_backend=backend,
+        enforcement_interfaces=_list_setting("SMART_SHIELD_ENFORCEMENT_INTERFACES"),
+        enforcement_lab_interfaces=_list_setting("SMART_SHIELD_ENFORCEMENT_LAB_INTERFACES"),
         session_idle_minutes=_int_setting("SMART_SHIELD_SESSION_IDLE_MINUTES", 30, 1, 24 * 60),
         lockout_max_attempts=_int_setting("SMART_SHIELD_LOCKOUT_MAX_ATTEMPTS", 5, 1, 100),
         lockout_minutes=_int_setting("SMART_SHIELD_LOCKOUT_MINUTES", 15, 1, 24 * 60),

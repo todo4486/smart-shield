@@ -225,7 +225,7 @@ CREATE TABLE mitigation_actions (
     expires_at                TEXT    CHECK (expires_at IS NULL OR applied_at IS NULL OR expires_at > applied_at),
     ended_at                  TEXT,
     ended_by                  INTEGER REFERENCES users (id) ON DELETE SET NULL,
-    end_reason                TEXT    CHECK (end_reason IS NULL OR length(end_reason) <= 500),
+    end_reason                TEXT    CHECK (end_reason IS NULL OR length(end_reason) <= 500), interface_name TEXT CHECK (interface_name IS NULL OR length(interface_name) <= 64), commands_json TEXT,
     -- A rate limit needs a limit; blocking, isolating and prioritizing do not take one.
     CHECK ((action_type = 'rate_limit') = (limit_bps IS NOT NULL)),
     -- Only prioritizing acts on the whole link.

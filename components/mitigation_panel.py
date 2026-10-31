@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from components.ui import format_bits_rate, format_ratio, format_timestamp, kpi_tile, provenance_chip, section_label
-from services import mitigation_service, settings_service
+from services import enforcement_service, mitigation_service, settings_service
 from services.authorization import Permission, PermissionDenied, Principal
 from services.mitigation_service import MitigationError
 from services.settings_service import MITIGATION_POLICIES, SettingsError
@@ -25,14 +25,14 @@ RECOVERY_LABELS = {"pending": "Checking…", "recovered": "Recovered", "partial"
                    "not_recovered": "Not recovered", "unavailable": "Unavailable", "not_applied": "Not applied"}
 
 
-def render_policy(principal: Principal) -> None:
+def render_policy(principal: Principal, *, key: str = "mitigation_policy") -> None:
     settings = settings_service.get_mitigation_settings()
     if not principal.has(Permission.MANAGE_SETTINGS):
         st.markdown(f"Mitigation policy: **{POLICY_LABELS[settings.policy]}**. {POLICY_HELP[settings.policy]} "
                     "Only an administrator can change it.")
         return
     chosen = st.radio("Mitigation policy", MITIGATION_POLICIES, index=MITIGATION_POLICIES.index(settings.policy),
-                      format_func=POLICY_LABELS.get, horizontal=True, key="mitigation_policy")
+                      format_func=POLICY_LABELS.get, horizontal=True, key=key)
     st.caption(POLICY_HELP[chosen])
     if chosen != settings.policy:
         try:
@@ -50,16 +50,26 @@ def _allocation_rows(allocation: Mapping[str, Any]) -> pd.DataFrame:
     } for name, grant in allocation["classes"].items()])
 
 
-def _render_allocation(principal: Principal, session_id: int) -> None:
+def _render_allocation(principal: Principal, session_id: int, provenance: str) -> None:
     allocation = mitigation_service.latest_allocation(principal, session_id)
     if allocation is None:
-        st.caption("No allocation has been calculated for this session yet.")
+        st.caption("No allocation yet. A live capture needs a configured link capacity: without one, shares of the link "
+                   "are unavailable." if provenance == "measured"
+                   else "No allocation has been calculated for this session yet.")
         return
-    state = ("Limits are being enforced on this simulated link." if allocation["enforced"]
-             else "Calculated only: no mitigation is active, so the link is still a plain shared queue.")
+    if provenance == "measured":
+        state = ("Calculated from measured demand. Only the limits of active actions are enforced; the shares themselves are a plan."
+                 if allocation["enforced"] else "Calculated from measured demand. Nothing is being enforced.")
+    else:
+        state = ("Limits are being enforced on this simulated link." if allocation["enforced"]
+                 else "Calculated only: no mitigation is active, so the link is still a plain shared queue.")
     st.caption(f"{state} Available: {format_bits_rate(allocation['available_bps'])} of "
                f"{format_bits_rate(allocation['capacity_bps'])}.")
     st.dataframe(_allocation_rows(allocation), hide_index=True, width="stretch")
+
+
+def _sentence(text: str) -> str:
+    return text[:1].upper() + text[1:]  # str.capitalize would lowercase the rest: Mbit/s, IPv6 addresses
 
 
 def _evidence(m: Mapping[str, Any]) -> str:
@@ -75,7 +85,7 @@ def _evidence(m: Mapping[str, Any]) -> str:
 
 def _render_proposal(principal: Principal, m: Dict[str, Any]) -> None:
     with st.container(border=True):
-        st.markdown(f"**#{m['id']} · {m['description'].capitalize()}**")
+        st.markdown(f"**#{m['id']} · {_sentence(m['description'])}**")
         st.caption(_evidence(m))
         if m["upstream_required"]:
             st.warning("A flood from outside fills the link before it reaches this controller. This can contain it, but "
@@ -123,23 +133,36 @@ def _compare_rows(before: Optional[Mapping[str, Any]], after: Optional[Mapping[s
     return pd.DataFrame([{"": label, "Before": cell(b), "After": cell(a)} for label, b, a in rows])
 
 
-def _render_action(principal: Principal, m: Dict[str, Any]) -> None:
+def _speed(m: Mapping[str, Any]) -> str:
+    if m["adapter"] == "simulated-link":  # a simulated link has no command to time: the limit takes effect next interval
+        return "effective from the next interval"
+    if m["adapter"] == enforcement_service.DRY_RUN:
+        return "dry run, nothing changed"
+    return f"on {m['interface_name']} with {m['adapter']} in {m['execution_ms'] or 0:,.1f} ms"
+
+
+def render_action(principal: Principal, m: Dict[str, Any], *, key_prefix: str = "") -> None:
     with st.container(border=True):
         who = "the engine" if m["decided_by"] is None and m["initiated_by"] == "engine" else "an administrator"
-        st.markdown(f"**#{m['id']} · {m['description'].capitalize()}** · {m['status'].replace('_', ' ')}, by {who}")
+        st.markdown(f"**#{m['id']} · {_sentence(m['description'])}** · {m['status'].replace('_', ' ')}, by {who}")
         if m["status"] == "failed":
             st.error(m["failure_reason"] or "It could not be applied.")
             return
-        # A simulated link has no command to time: the limit simply takes effect at the next interval.
-        speed = "effective from the next interval" if m["adapter"] == "simulated-link" else f"in {m['execution_ms'] or 0:,.1f} ms"
-        st.caption(f"{_evidence(m)}  \nApplied {format_timestamp(m['applied_at'])}, {speed} · "
+        if m["adapter"] == enforcement_service.DRY_RUN:
+            st.info("Dry run: this is a record of the decision. Nothing on the network was changed.", icon=":material/science:")
+        elif m["status"] == "active" and m["failure_reason"]:
+            st.error(f"{m['failure_reason']} It may still be in force. Use Roll back or the emergency stop.")
+        st.caption(f"{_evidence(m)}  \nApplied {format_timestamp(m['applied_at'])}, {_speed(m)} · "
                    f"expires {format_timestamp(m['expires_at'])} · recovery: **{RECOVERY_LABELS[m['recovery_status']]}**")
         if m["recovery_note"]:
             st.markdown(m["recovery_note"])
-        if m["before"]:
+        if (m["before"] or {}).get("samples"):  # with no samples every cell would only say Unavailable
             st.dataframe(_compare_rows(m["before"], m["after"], m["target_kind"]), hide_index=True, width="stretch")
+        if m["commands"]:
+            with st.expander("Commands that would run" if m["adapter"] == enforcement_service.DRY_RUN else "Commands that ran"):
+                st.code(enforcement_service.describe_commands(m["commands"]), language="text")
         if m["status"] == "active" and principal.has(Permission.APPLY_TRAFFIC_POLICY):
-            if st.button("Roll back", key=f"mitigation_rollback_{m['id']}", icon=":material/undo:"):
+            if st.button("Roll back", key=f"mitigation_rollback_{key_prefix}{m['id']}", icon=":material/undo:"):
                 _attempt(mitigation_service.rollback, principal, m["id"], reason="Rolled back from the dashboard")
 
 
@@ -157,7 +180,7 @@ def render_session(principal: Principal, session_id: int, *, provenance: str = "
         kpi_tile("Finished", f"{len(done):,}", "derived")
     section_label("Bandwidth allocation")
     st.markdown(provenance_chip(provenance), unsafe_allow_html=True)
-    _render_allocation(principal, session_id)
+    _render_allocation(principal, session_id, provenance)
     if proposed:
         section_label("Waiting for a decision")
         for m in proposed:
@@ -165,10 +188,10 @@ def render_session(principal: Principal, session_id: int, *, provenance: str = "
     if active:
         section_label("Active")
         for m in active:
-            _render_action(principal, m)
+            render_action(principal, m)
     if done:
         section_label("Finished")
         for m in done[:5]:
-            _render_action(principal, m)
+            render_action(principal, m)
     if not actions:
         st.caption("No action yet. Only flows the models flag start one: a busy link alone never does.")

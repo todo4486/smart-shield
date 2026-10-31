@@ -495,17 +495,6 @@ def test_a_failed_enforcer_is_recorded_as_failed(admin, engine):
     assert [r for r in audit_rows() if r["action"] == "mitigation.apply" and r["outcome"] == "failure"]
 
 
-def test_real_sessions_have_no_enforcer_yet_and_say_so(admin):
-    with database_service.session(write=True) as conn:
-        session_id = conn.execute(
-            "INSERT INTO monitoring_sessions (user_id, source_type, status, interface_name, started_at, configuration_json) "
-            "VALUES (?, 'live_capture', 'RUNNING', 'en0', '2026-10-01T00:00:00.000000+00:00', '{}')", (admin.user_id,)).lastrowid
-    result = ms.request_action(admin, session_id, "rate_limit", target="10.0.0.2", limit_bps=M, reason="Too much traffic")
-    assert result["status"] == "failed" and "No enforcement backend" in result["failure_reason"]
-    with pytest.raises(MitigationError, match="simulated link"):
-        ms.request_action(admin, session_id, "isolate", target="10.0.0.3", reason="Compromised", confirm_target="10.0.0.3")
-
-
 def test_ending_a_simulation_ends_its_actions_and_clearing_removes_them(admin, engine):
     _train(admin)
     session_id = _start(engine, admin, "bandwidth_hog")
