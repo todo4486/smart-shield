@@ -39,7 +39,7 @@ from repositories import telemetry_repository
 from repositories.incident_repository import SIMULATION_SOURCE_NAME
 from services import (
     alert_service, audit_service, database_service, incident_correlation_service, intrusion_inference_service,
-    settings_service,
+    preventive_service, settings_service,
     mitigation_service, model_registry_service, monitoring_service,
 )
 from services.authorization import Permission, Principal, require_permission
@@ -52,6 +52,7 @@ from services.monitoring_service import SessionState, SourceType
 
 TICK_SECONDS = 1.0
 ALERT_WINDOW_SECONDS = 10
+FORECAST_EVERY_SECONDS = 30
 DEFAULT_ATTACK_DELAY_SECONDS = 15
 MAX_DURATION_SECONDS = 1800
 SIMULATED_INTERFACE = "simulated-link"
@@ -289,6 +290,7 @@ class SimulationStatus:
     loss_ratio: Optional[float] = None
     flows_per_second: Optional[float] = None
     last_error: Optional[str] = None
+    forecast_note: Optional[str] = None
 
 
 def live_compatible_model(principal: Principal) -> Tuple[Optional[ModelRecord], Optional[ModelRecord]]:
@@ -460,6 +462,8 @@ class SimulationEngine:
             done = status.elapsed_seconds >= status.duration_seconds
         if created:
             self._correlate()
+        if int(self._generator.elapsed) % FORECAST_EVERY_SECONDS == 0:
+            self._forecast(session_id, datetime.fromtimestamp(now + seconds, tz=timezone.utc))
         if done:
             created_last = self._flush_alerts(now + seconds)
             if created_last:
@@ -574,6 +578,18 @@ class SimulationEngine:
             dedup_key=f"simulation:{self.status.session_id}:{category}:{window}", session_id=self.status.session_id,
             model_id=(model or {}).get("id"), model_version=(model or {}).get("version"),
             created_by=self._principal.user_id if self._principal else None)
+
+    def _forecast(self, session_id: int, moment: datetime) -> None:
+        """A forecaster that samples every few minutes rarely has enough history in a short run, and then this only says so."""
+        if self._principal is None or not self._principal.has(Permission.RUN_DETECTION):
+            return
+        try:
+            outlook = preventive_service.run(self._principal, session_id, SIMULATED_INTERFACE, moment)
+            note = outlook.reason or f"Forecast updated: {outlook.status}."
+        except Exception as exc:  # forecasting problems must not stop the simulation
+            note = f"Forecast failed: {exc}"
+        with self._lock:
+            self.status.forecast_note = note
 
     def _correlate(self) -> None:
         try:

@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from components import allocation_controls, attack_response, enforcement_panel, live_network, waterfill
+from components import allocation_controls, attack_response, enforcement_panel, live_network, preventive_panel, waterfill
 from components.guard import require_principal
 from components.theme import COLORS, apply_chart_theme
 from components.ui import format_bits_rate, format_timestamp, kpi_tile, page_header, section_label
@@ -29,8 +29,8 @@ st.info("**Recommendation mode.** Policies and recommendations do not change rea
         "does, on a backend an administrator has turned on (see *Enforcement*). It is off by default.", icon=":material/info:")
 
 policies = bandwidth_service.list_policies(principal)
-live_tab, response_tab, controls_tab, policy_tab, recommend_tab, history_tab, enforce_tab = st.tabs(
-    ["Live network", "Attack response", "Allocation controls", "Policies", "Recommend", "History", "Enforcement (advanced)"]
+live_tab, response_tab, forecast_tab, controls_tab, policy_tab, recommend_tab, history_tab, enforce_tab = st.tabs(
+    ["Live network", "Attack response", "Forecast", "Allocation controls", "Policies", "Recommend", "History", "Enforcement (advanced)"]
 )
 
 with live_tab:
@@ -39,6 +39,9 @@ with live_tab:
 
 with response_tab:
     attack_response.render(principal)
+
+with forecast_tab:
+    preventive_panel.render(principal)
 
 with controls_tab:
     allocation_controls.render(principal)

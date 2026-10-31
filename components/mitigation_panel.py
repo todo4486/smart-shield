@@ -74,7 +74,7 @@ def _sentence(text: str) -> str:
 
 def _evidence(m: Mapping[str, Any]) -> str:
     if m["confidence"] is None:
-        return "Requested by an administrator."
+        return m["reason"] if m["initiated_by"] == "engine" else "Requested by an administrator."
     basis = "tree votes" if m["confidence_basis"] == "classifier_votes" else "share of flows flagged"
     parts = [f"**{m['category']}**", f"severity {m['severity']}", f"confidence {m['confidence']:.2f} ({basis}, not a probability)",
              f"seen in {m['repetition']} window(s)", f"false-positive risk {m['false_positive_risk']:.2f} (heuristic)"]

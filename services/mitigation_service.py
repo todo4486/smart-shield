@@ -43,6 +43,7 @@ from services.traffic_shaping_service import ShapingError
 from services.timeutil import parse_iso, to_iso, utc_now
 
 ACTION_TYPES = ("rate_limit", "prioritize", "block", "isolate")
+PREDICTED_CONGESTION = "Predicted congestion"
 HIGH_IMPACT = ("block", "isolate")
 ASSESS_WINDOW_SECONDS = 60
 SUSPICIOUS_WINDOW_SECONDS = 60
@@ -581,8 +582,10 @@ def _new_incident(conn, session_id: int, m: Mapping[str, Any], now: datetime) ->
     source_type = source["source_type"] if source else None
     moment = to_iso(now)
     what = m["category"] or "Administrator action"
+    predicted = m["category"] == PREDICTED_CONGESTION  # a forecast is a performance matter, never evidence of an attack
     return incident_repository.insert(conn, {
-        "title": f"{what} on {m['target']}"[:200], "classification": "security" if m["category"] else "undetermined",
+        "title": f"{what} on {m['target']}"[:200],
+        "classification": "performance" if predicted else "security" if m["category"] else "undetermined",
         "status": "open", "window_start": moment, "window_end": moment,
         "correlation_rationale": (f"Opened by mitigation #{m['id']}: {m['reason']}" if m["category"]
                                   else f"Opened by an administrator's action, with no model verdict behind it: {m['reason']}"),
@@ -671,6 +674,45 @@ def _load(conn, mitigation_id: int) -> Dict[str, Any]:
     if row is None:
         raise MitigationError("Mitigation not found.")
     return dict(row)
+
+
+def project_demand(session_id: int, predicted_total_bps: Optional[float]) -> tuple:
+    """(allocation now, allocation at the forecast's total, largest ordinary senders), scaling every host's stored demand by the
+    same factor. All None without stored hosts: per-host forecasts do not exist, and this never pretends they do."""
+    with database_service.session() as conn:
+        latest = repo.latest_allocation(conn, session_id)
+    if latest is None or not predicted_total_bps:
+        return None, None, []
+    hosts = json.loads(latest["hosts_json"])
+    total = sum(float(h["demand_bps"]) for h in hosts)
+    if total <= 0:
+        return json.loads(latest["classes_json"]), None, []
+    factor = predicted_total_bps / total
+    projected = host_allocation.allocate_hosts(
+        float(latest["capacity_bps"]), _allocation_policy(settings_service.get_mitigation_settings()),
+        [HostDemand(h["host"], h["traffic_class"], float(h["demand_bps"]) * factor, h["limit_bps"]) for h in hosts])
+    ordinary = sorted((h for h in hosts if h["traffic_class"] == host_allocation.NORMAL), key=lambda h: -float(h["demand_bps"]))
+    return json.loads(latest["classes_json"]), _allocation_summary(projected), [h["host"] for h in ordinary[:3]]
+
+
+def apply_preventive(session_id: int, reason: str, now: datetime) -> Dict[str, Any]:
+    """PredictNet's automatic change, once preventive_service's checks have all passed: prioritizing only, on a simulated link
+    only, under the Auto rate-limit policy only. Caps per sender that expire and can be rolled back. It targets nobody."""
+    settings = settings_service.get_mitigation_settings()
+    if settings.policy != "auto_rate_limit" or not settings.preventive_auto:
+        raise MitigationError("Automatic preventive changes are not permitted by the current policy.")
+    with database_service.session(write=True) as conn:
+        if _session_origin(conn, session_id) != "simulation":
+            raise MitigationError("Automatic prioritizing is only available on a simulated link.")
+        existing = repo.open_for_target(conn, session_id, "link", "link")
+        if existing:
+            return dict(existing[0])
+        mitigation_id = repo.insert(conn, {
+            "origin": "simulation", "session_id": session_id, "action_type": "prioritize", "target_kind": "link", "target": "link",
+            "status": "proposed", "initiated_by": "engine", "duration_seconds": 60 * settings.rate_limit_minutes,
+            "reason": reason[:500], "category": PREDICTED_CONGESTION, "created_at": to_iso(now)})
+        row = dict(repo.get(conn, mitigation_id))
+    return _acted(_apply(row, decided_by=None, note="Applied automatically on a validated forecast.", now=now), session_id, now)
 
 
 def _acted(result: Dict[str, Any], session_id: Optional[int], now: datetime) -> Dict[str, Any]:

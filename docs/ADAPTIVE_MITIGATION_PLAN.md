@@ -1,6 +1,6 @@
 # Adaptive Bandwidth Allocation & Automated Threat Mitigation: review and plan
 
-Status: **approved 2026-10-30; M1 to M5 done, M6 next.** Decisions are recorded in section 6.
+Status: **approved 2026-10-30; M1 to M6 done, M7 next.** Decisions are recorded in section 6.
 
 ## 1. The project today
 
@@ -173,3 +173,18 @@ app.py (st.navigation router; signed out = login page only)
     the simulated link the shares are enforced while Prioritize is active.
   - Acceptance 11 is shown on the simulated link only: on a full link the critical application went from 0 to its full 8 Mbit/s
     once prioritized (test).
+- **M6 (PredictNet link), done.** `services/preventive_service.py`, `repositories/preventive_repository.py`,
+  `components/preventive_panel.py`, migration `015` (`preventive_recommendations`), a Forecast tab in Bandwidth Management.
+  - With no active forecaster, too little history or no configured capacity, the page says unavailable and nothing is predicted.
+  - A running capture forecasts every minute, a simulation every 30 s, and a replay once per model interval. A forecaster sampling
+    every 5 minutes needs an hour of history, so a short simulation only reports that it does not have enough.
+  - A recommendation opens when a forecast reaches a configurable threshold: "likely" on the prediction, "possible" on the prediction
+    plus its typical error. It closes when a newer forecast eases or its time passes. The projected allocation scales stored
+    host demand in proportion, and says so; forecasts are per link, not per host.
+  - Validated means machine learning was chosen over the baselines on validation data and did not lose to them on held-out test data.
+  - Automatic change needs the Auto rate-limit policy, a separate switch that is off by default, adaptive allocation, a validated
+    horizon, a likely forecast twice in a row and no recent refusal. It only prioritizes, and only on a simulated link, so a real link
+    always stops at a recommendation. Prioritizing is treated as allowed under rule 5 because it is per-sender rate limits that expire and
+    can be rolled back; it targets nobody. Its incident is classified as a performance matter, never an attack.
+  - Not exercised: the automatic path with a real short-interval forecaster (tests use a built forecast), and any forecast on real live traffic.
+

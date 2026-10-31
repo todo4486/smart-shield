@@ -34,7 +34,7 @@ import pandas as pd
 from repositories import monitoring_repository, telemetry_repository
 from services import (
     alert_service, audit_service, capture_worker, database_service, incident_correlation_service, mitigation_service,
-    model_registry_service,
+    model_registry_service, preventive_service,
     monitoring_service, settings_service,
 )
 from services.authorization import Permission, Principal, require_permission
@@ -48,6 +48,7 @@ FLUSH_SECONDS = 2.0
 JOIN_TIMEOUT_SECONDS = 5.0
 LIVE_ALERT_COOLDOWN_MINUTES = 15
 EXPIRY_CHECK_SECONDS = 5.0
+FORECAST_CHECK_SECONDS = 60.0
 MODES = {"counters": "Interface counters (no special permission)",
          "packets": "Counters + passive packet capture and flow analysis (needs capture permission)"}
 
@@ -126,6 +127,7 @@ class LiveStatus:
     detection: Dict[str, Any] = field(default_factory=dict)
     last_error: Optional[str] = None
     engine_error: Optional[str] = None
+    forecast_note: Optional[str] = None
 
 
 class LiveMonitor:
@@ -323,7 +325,7 @@ class LiveMonitor:
     def _consume_loop(self) -> None:
         metrics: List[Dict[str, Any]] = []
         flows: List[Dict[str, Any]] = []
-        last_flush = last_expiry = time.monotonic()
+        last_flush = last_expiry = last_forecast = time.monotonic()
         worker_done = False
         while True:
             try:
@@ -363,6 +365,9 @@ class LiveMonitor:
             if time.monotonic() - last_expiry >= EXPIRY_CHECK_SECONDS:  # expiry must not depend on packets arriving
                 self._engine(lambda: mitigation_service.expire_due(utc_now()))
                 last_expiry = time.monotonic()
+            if time.monotonic() - last_forecast >= FORECAST_CHECK_SECONDS:
+                self._engine(self._forecast)
+                last_forecast = time.monotonic()
             if worker_done or (self._consumer_stop.is_set() and self._queue_empty()):
                 break
             if not self._worker_alive() and self._queue_empty() and self.status.state in ("STARTING", "RUNNING"):
@@ -385,6 +390,13 @@ class LiveMonitor:
             self.status.engine_error = None
         except Exception as exc:
             self.status.engine_error = f"{type(exc).__name__}: {exc}"[:500]
+
+    def _forecast(self) -> None:
+        """PredictNet on this capture. Without a forecaster or enough history it only says so; capture is unaffected."""
+        if self._principal is None or not self._principal.has(Permission.RUN_DETECTION):
+            return
+        outlook = preventive_service.run(self._principal, self.status.session_id, self.status.interface)
+        self.status.forecast_note = outlook.reason or f"Forecast updated: {outlook.status}."
 
     def _end_mitigations(self, reason: str) -> None:
         session_id = self.status.session_id

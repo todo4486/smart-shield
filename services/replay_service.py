@@ -35,6 +35,7 @@ from repositories.incident_repository import REPLAY_SOURCE_NAME
 from services import (
     alert_service, audit_service, congestion_prediction_service, database_service, incident_correlation_service,
     intrusion_inference_service, model_registry_service, monitoring_service,
+    preventive_service,
 )
 from services.authorization import Permission, Principal, require_permission
 from services.dataset_service import LABEL_COLUMN, PROTOCOL_NAMES
@@ -565,7 +566,8 @@ class ReplayEngine:
             return
         self._last_forecast_window = current
         try:
-            congestion_prediction_service.generate_forecast(principal, self.status.session_id, REPLAY_INTERFACE)
+            forecast = congestion_prediction_service.generate_forecast(principal, self.status.session_id, REPLAY_INTERFACE)
+            preventive_service.evaluate(principal, self.status.session_id, REPLAY_INTERFACE, forecast)
             self.status.forecast_note = f"Forecast updated at replay time {self.status.replay_time}."
         except congestion_prediction_service.PredictionError as exc:
             self.status.forecast_note = f"No forecast yet: {exc}"

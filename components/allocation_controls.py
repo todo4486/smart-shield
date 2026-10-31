@@ -50,6 +50,12 @@ def render(principal: Principal) -> None:
         services = st.multiselect("Services treated as critical", known, [s for s in settings.critical_services if s in known],
                                   disabled=not can_change,
                                   help="Recognised by well-known destination port, which is not proof of the application.")
+        section_label("PredictNet")
+        c1, c2 = st.columns(2)
+        preventive = c1.slider("Recommend acting at forecast utilization (%)", 10, 100, round(settings.preventive_threshold * 100),
+                               disabled=not can_change, key="preventive_threshold")
+        preventive_auto = c2.toggle("Let a validated forecast prioritize by itself", settings.preventive_auto, disabled=not can_change,
+                                    help="Also needs the Auto rate-limit policy, and two likely forecasts in a row. Simulated link only.")
         st.caption("Per-host limits are set in Live network → Manage a host. They always expire, like every mitigation.")
         saved = st.form_submit_button("Save", type="primary", disabled=not can_change)
     if saved:
@@ -58,7 +64,8 @@ def render(principal: Principal) -> None:
                 settings, adaptive_enabled=adaptive, critical_min_share=critical_min / 100, critical_max_share=critical_max / 100,
                 critical_weight=float(critical_weight), normal_min_share=normal_min / 100, normal_max_share=normal_max / 100,
                 normal_weight=float(normal_weight), suspicious_max_share=suspicious_max / 100, rate_limit_share=limit_share / 100,
-                safety_margin=margin / 100, critical_services=tuple(services)))
+                safety_margin=margin / 100, critical_services=tuple(services), preventive_threshold=preventive / 100,
+                preventive_auto=preventive_auto))
         except (SettingsError, PermissionDenied) as exc:
             st.error(str(exc))
         else:
@@ -70,6 +77,6 @@ def render(principal: Principal) -> None:
         except PermissionDenied as exc:
             st.error(str(exc))
         else:
-            for key in ("critical_min", "critical_max", "critical_weight", "normal_min", "normal_max", "normal_weight"):
+            for key in ("critical_min", "critical_max", "critical_weight", "normal_min", "normal_max", "normal_weight", "preventive_threshold"):
                 st.session_state.pop(key, None)
             st.rerun()

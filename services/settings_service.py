@@ -24,7 +24,7 @@ class PredictNetSettings:
     elevated_threshold: float = 0.60
     high_threshold: float = 0.75
     critical_threshold: float = 0.90
-    horizons_minutes: tuple = (1, 5, 15)
+    horizons_minutes: tuple = (1, 5, 10, 15)
     alert_cooldown_minutes: int = 30
     rapid_rise_per_hour: float = 0.20  # utilization ratio gained per hour that counts as a rapid rise
     sustained_high_samples: int = 3
@@ -303,6 +303,8 @@ class MitigationSettings:
     critical_weight: float = 6.0  # how the capacity left after minimums is shared
     normal_weight: float = 3.0
     critical_services: Tuple[str, ...] = ()  # service names from live_network_service.SERVICE_PORTS treated as critical
+    preventive_threshold: float = 0.75  # forecast utilization at which PredictNet recommends acting early
+    preventive_auto: bool = False  # may a validated forecast change allocation by itself; also needs the Auto policy
 
     def validate(self) -> "MitigationSettings":
         if self.policy not in MITIGATION_POLICIES:
@@ -340,6 +342,8 @@ class MitigationSettings:
                 raise SettingsError(f"{name} maximum must be between 0% and 100%.")
             if float(low) > float(high):
                 raise SettingsError(f"{name} minimum cannot be above its maximum.")
+        if not 0.1 <= float(self.preventive_threshold) <= 1:
+            raise SettingsError("The forecast threshold must be between 10% and 100%.")
         for name, weight in (("Critical", self.critical_weight), ("Normal", self.normal_weight)):
             if not 1 <= float(weight) <= 10:
                 raise SettingsError(f"{name} priority must be between 1 and 10.")
