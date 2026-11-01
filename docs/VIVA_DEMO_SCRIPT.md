@@ -27,6 +27,27 @@ Uses replay mode, so it needs no live network and gives the same result every ti
 | 1:45 | **Reports → Incident report → Build**, then show the download. | "One click gives a printable report: timeline, hosts, ATT&CK, explanations, actions from the audit log and notes." |
 | 1:55 | Back to **Replay / demo** → **Stop**. | "And because it was a replay, an admin can clear it in one audited step." |
 
+## Threat mitigation (about 3 minutes more)
+
+Needs a registered live-compatible model: **ML Laboratory**, feature set *live-compatible*. It does not have to be the active one.
+Leave the policy on **Recommend**. Everything here is simulated and labelled so, and no packet is sent.
+
+| Time | Do | Say |
+| --- | --- | --- |
+| 0:00 | **Simulation → Bandwidth hog**, capacity 100 Mbit/s, then **Start simulation**. | "This creates traffic records in memory. They go through the real flow extractor and the real Random Forest, so no verdict is scripted." |
+| 0:30 | **Bandwidth Management → Live network**: tiles, allocation graph, host table. | "One host is taking most of the link. The models flagged it, and that is what starts things. A busy link alone never does, because congestion is not an attack." |
+| 0:50 | **Incident Center**: open the incident, read the evidence, enter a reason and click **Approve**. | "Status is Mitigation pending. Confidence, severity, repetition and false-positive risk are kept separate. None is a probability. By default an administrator decides." |
+| 1:20 | **Bandwidth Management → Attack response**. Wait about 10 seconds for the after picture. | "Before and after come from stored samples. The hog goes down to its limit, legitimate traffic gets its share back, and loss falls. It says Simulated because it is." |
+| 1:50 | **Incident Center → Roll back**. | "Every action expires and is reversible in one click. The audit log records all of it." |
+| 2:10 | **Bandwidth Management → Forecast**: source `historical import`, interface `campus-uplink`, **Forecast now**. | "PredictNet predicts 5 and 10 minutes ahead and recommends acting early. With no validated model it says unavailable, and it never changes a real link by itself." |
+| 2:40 | **Enforcement (advanced)**. | "On a real network this runs pf or tc. It is in dry run here, showing the exact commands. I have not run it in a real kernel, because that needs root." |
+
+If asked about a flood: run **DDoS-like flood**. Recovery shows **Partly recovered**, because a controller on your side cannot free a
+link that is already full. Mitigation has to happen upstream, and the app says so.
+
+See `docs/ACCEPTANCE.md` for what was checked where. Rehearse with the Mac on power and the lid open: real-time simulation stalls if
+it sleeps.
+
 ## If something goes wrong
 
 - **No toast?** Toasts only show incidents that are new since the page opened. Open the Incident Center directly.

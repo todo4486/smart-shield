@@ -277,3 +277,21 @@ def test_break_gaps_inserts_empty_point_in_long_gaps():
     assert len(broken) == 6 and broken["timestamp"].is_monotonic_increasing
     assert str(broken["timestamp"].dt.tz) == "UTC"
     assert broken["latency_ms"].isna().sum() == 1
+
+
+def _utilization_csv(utilization: str) -> bytes:
+    return csv("timestamp,throughput_bps,configured_capacity_bps,utilization_ratio",
+               *(f"2026-01-01T00:0{i}:00Z,800000000,1000000000,{utilization}" for i in range(5)))
+
+
+def test_a_utilization_column_that_disagrees_with_throughput_is_flagged(analyst):
+    def warnings(content, unit="ratio"):
+        options = TelemetryImportOptions(source_name="s", naive_timestamps_are_utc=True, utilization_unit=unit)
+        return telemetry_service.import_telemetry_csv(analyst, content, "f.csv", options).warnings
+
+    assert not any("disagrees" in w for w in warnings(_utilization_csv("0.8")))
+    wrong_as_percent = warnings(_utilization_csv("0.81"), unit="percent")
+    assert any("disagrees" in w and "imported as a percent" in w for w in wrong_as_percent)
+    wrong_as_ratio = _utilization_csv("0.008")
+    assert any("disagrees" in w and "100 times too small" in w for w in warnings(wrong_as_ratio))
+

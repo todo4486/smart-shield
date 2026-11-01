@@ -1,6 +1,6 @@
 # Adaptive Bandwidth Allocation & Automated Threat Mitigation: review and plan
 
-Status: **approved 2026-10-30; M1 to M6 done, M7 next.** Decisions are recorded in section 6.
+Status: **approved 2026-10-30; All phases done (M1 to M7). Results are in `docs/ACCEPTANCE.md`.** Decisions are recorded in section 6.
 
 ## 1. The project today
 
@@ -171,7 +171,7 @@ app.py (st.navigation router; signed out = login page only)
   - **Known gap against the spec.** "All controls must affect the actual network-control adapter" is only partly met. On a real link
     the class shares are a plan: approved limits, blocks and isolation are enforced per host, and class policies through `tc`. On
     the simulated link the shares are enforced while Prioritize is active.
-  - Acceptance 11 is shown on the simulated link only: on a full link the critical application went from 0 to its full 8 Mbit/s
+  - Acceptance 11 is shown on the simulated link only: on a full link the critical application went from 7 to its full 8 Mbit/s
     once prioritized (test).
 - **M6 (PredictNet link), done.** `services/preventive_service.py`, `repositories/preventive_repository.py`,
   `components/preventive_panel.py`, migration `015` (`preventive_recommendations`), a Forecast tab in Bandwidth Management.
@@ -187,4 +187,7 @@ app.py (st.navigation router; signed out = login page only)
     always stops at a recommendation. Prioritizing is treated as allowed under rule 5 because it is per-sender rate limits that expire and
     can be rolled back; it targets nobody. Its incident is classified as a performance matter, never an attack.
   - Not exercised: the automatic path with a real short-interval forecaster (tests use a built forecast), and any forecast on real live traffic.
-
+- **M7 (final pass), done.** `scripts/acceptance.py` runs all 12 acceptance tests on a throwaway copy of the database, and
+  `docs/ACCEPTANCE.md` holds the results and what is still not done. Real use also exposed a data problem: a telemetry file imported with
+  the wrong unit stored utilization 100 times too small, with nothing to flag it. Imports now warn when utilization disagrees with
+  throughput ÷ capacity.

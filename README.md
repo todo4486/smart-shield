@@ -129,6 +129,8 @@ under their own source type, correlated only with each other, and left out of th
 | `python -m scripts.manage apply-retention [--dry-run]` | Delete data older than the retention settings (preview with `--dry-run`) |
 | `python -m scripts.manage dump-schema [--check]` | Regenerate `database/schema.sql`, or check it is current |
 | `python -m scripts.make_sample_data` | Regenerate the labelled synthetic sample CSVs |
+| `python -m scripts.manage enforcement-check --backend pf\|tc --interface NAME [--install]` | Show, or as root really try, an enforcement backend on reserved test addresses |
+| `python -m scripts.acceptance --interface en0` | Run the 12 acceptance tests on a throwaway copy of the database (see `docs/ACCEPTANCE.md`) |
 | `pytest -q` | Run all tests (each test uses its own temporary database) |
 
 ## Architecture

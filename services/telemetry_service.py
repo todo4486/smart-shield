@@ -164,6 +164,28 @@ def _parse_metric(raw: pd.Series, name: str, unit: str, rejections: _RowRejectio
     return values
 
 
+def _utilization_disagreement(frame: pd.DataFrame, measured: pd.Series) -> List[str]:
+    """The file's own columns can check each other. Choosing the wrong unit at import looks fine otherwise."""
+    implied = (frame["throughput_bps"] / frame["configured_capacity_bps"])[measured]
+    stated = frame["utilization_ratio"][measured]
+    known = implied.notna() & stated.notna()
+    if not known.any():
+        return []
+    off = (implied[known] - stated[known]).abs() > 0.05
+    if off.mean() <= 0.05:
+        return []
+    message = (f"Utilization disagrees with throughput ÷ capacity in {int(off.sum())} of {int(known.sum())} rows, so one of them "
+               "is wrong.")
+    positive = stated[known] > 0
+    if positive.any():
+        scale = float((implied[known][positive] / stated[known][positive]).median())
+        if 80 <= scale <= 120:
+            message += " It is about 100 times too small, so this column was probably a ratio imported as a percent."
+        elif 0.008 <= scale <= 0.012:
+            message += " It is about 100 times too large, so this column was probably a percent imported as a ratio."
+    return [message]
+
+
 def _sampling(frame: pd.DataFrame) -> List[SamplingSummary]:
     summaries = []
     for interface, group in frame.groupby("interface_key", sort=True):
@@ -298,6 +320,7 @@ def _import(principal: Principal, data: bytes, filename: str, options: Telemetry
             f"{int(over_capacity.sum())} rows have throughput above the configured capacity; utilization was left "
             "unavailable for them. Check the capacity value."
         )
+    warnings.extend(_utilization_disagreement(frame, measured_util))
     if frame["utilization_ratio"].isna().all():
         warnings.append("Utilization is unavailable for every row: no utilization column and no known capacity. "
                         "Absolute rates will be shown instead.")
