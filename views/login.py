@@ -5,11 +5,13 @@ from html import escape
 
 import streamlit as st
 
+from components import intro
 from components.theme import hide_sidebar
 from config import ASSETS_DIR
 from services import auth_service, session_service
 
 hide_sidebar()
+intro.render_login()
 
 flash = session_service.pop_flash(st.session_state)
 first_run = not auth_service.has_any_users()
@@ -65,6 +67,7 @@ with form_col:
                 st.error(str(exc))
             else:
                 session_service.start(st.session_state, user)
+                intro.request_welcome()
                 st.rerun()
 
     with tabs["Create account"]:
@@ -92,6 +95,7 @@ with form_col:
                         st.error(str(exc))
                     else:
                         session_service.start(st.session_state, user)
+                        intro.request_welcome()
                         st.rerun()
 
     st.markdown(

@@ -10,6 +10,7 @@ import logging
 
 import streamlit as st
 
+from components import intro
 from components.sidebar import render_logo, render_sidebar
 from components.header import render_header
 from components.theme import inject_css, register_plotly_template
@@ -87,6 +88,7 @@ else:
     navigation = st.navigation(sections, position="sidebar", expanded=True)
     render_sidebar(principal)
     render_header(principal)
+    intro.render_welcome(principal.name)
     # Incident permalinks (?incident=42): the page path is lost while signing in (only the login page exists
     # then), so a signed-in visit carrying the parameter is taken to the Incident Center once.
     incident_link = st.query_params.get("incident")

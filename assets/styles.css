@@ -214,3 +214,41 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .ss-pipe-kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; font-size: 0.85rem; }
 .ss-pipe-kv dt { color: var(--ss-muted); } .ss-pipe-kv dd { margin: 0; font-family: var(--ss-mono); color: var(--ss-text); overflow-wrap: anywhere; }
 @media (max-width: 900px) { .ss-pipe { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* Sign-in intro (components/intro.py). Hidden and click-through unless its animation is running, so removing animations
+   (Reduce motion, prefers-reduced-motion) simply means it never shows. */
+.ss-intro { position: fixed; inset: 0; z-index: 999999; display: flex; align-items: center; justify-content: center; pointer-events: none;
+  visibility: hidden; opacity: 0; background: radial-gradient(circle at 50% 42%, #14213D 0%, var(--ss-bg) 62%);
+  animation: ss-intro-show 2.7s ease-in-out both; }
+.ss-intro-quick { animation: ss-intro-show-quick 1.7s ease-in-out both; }
+[data-testid="stElementContainer"]:has(> [data-testid="stMarkdown"] .ss-intro) { position: absolute; height: 0; margin: 0; }
+.ss-intro-stage { display: flex; flex-direction: column; align-items: center; padding: 0 16px; text-align: center; }
+.ss-intro-mark { position: relative; width: 112px; height: 122px; margin-bottom: 1.1rem; }
+.ss-intro-logo { width: 100%; height: 100%; display: block; position: relative; overflow: visible; filter: drop-shadow(0 0 22px rgba(59,130,246,.55)); }
+.ss-intro-outline { stroke-dasharray: 1; animation: ss-intro-draw .8s ease-in-out .05s both; }
+.ss-intro-fill { animation: ss-intro-fade .45s ease-out .6s both; }
+.ss-intro-check { stroke-dasharray: 1; animation: ss-intro-draw .35s ease-out .85s both; }
+.ss-intro-ring { position: absolute; left: 50%; top: 50%; width: 112px; height: 112px; margin: -56px 0 0 -56px; border-radius: 50%;
+  border: 1.5px solid var(--ss-accent, #3B82F6); animation: ss-intro-ring 1.5s ease-out .75s both; }
+.ss-intro-ring-2 { animation-delay: 1.05s; }
+.ss-intro-word { color: var(--ss-text); font-size: clamp(2rem, 7vw, 3.1rem); font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; white-space: nowrap; }
+.ss-intro-word span { display: inline-block; animation: ss-intro-letter .5s cubic-bezier(.2,.8,.2,1.15) both; }
+.ss-intro-sub { color: var(--ss-muted); font-size: .78rem; font-weight: 600; letter-spacing: .28em; margin-top: .6rem; animation: ss-intro-track .7s ease-out 1.5s both; }
+.ss-intro-bar { width: 180px; height: 2px; margin-top: 1.3rem; border-radius: 2px; background: var(--ss-border); overflow: hidden; animation: ss-intro-fade .3s ease-out 1.3s both; }
+.ss-intro-bar b { display: block; height: 100%; background: var(--ss-accent, #3B82F6); transform-origin: left; animation: ss-intro-load .8s ease-in-out 1.4s both; }
+.ss-intro-quick .ss-intro-mark { width: 84px; height: 92px; }
+.ss-intro-quick .ss-intro-ring { width: 84px; height: 84px; margin: -42px 0 0 -42px; animation-delay: .4s; }
+.ss-intro-quick .ss-intro-outline { animation-duration: .45s; }
+.ss-intro-quick .ss-intro-fill { animation-delay: .3s; }
+.ss-intro-quick .ss-intro-check { animation-delay: .45s; }
+.ss-intro-welcome { font-size: clamp(1.5rem, 5vw, 2.2rem); animation: ss-intro-rise .45s ease-out .5s both; }
+@keyframes ss-intro-show { 0%, 86% { visibility: visible; opacity: 1; } 100% { visibility: hidden; opacity: 0; } }
+@keyframes ss-intro-show-quick { 0%, 78% { visibility: visible; opacity: 1; } 100% { visibility: hidden; opacity: 0; } }
+@keyframes ss-intro-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes ss-intro-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ss-intro-ring { 0% { transform: scale(.7); opacity: 0; } 8% { opacity: .7; } 100% { transform: scale(2.3); opacity: 0; } }
+@keyframes ss-intro-letter { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+@keyframes ss-intro-track { from { opacity: 0; letter-spacing: .5em; } to { opacity: 1; letter-spacing: .28em; } }
+@keyframes ss-intro-load { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes ss-intro-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
