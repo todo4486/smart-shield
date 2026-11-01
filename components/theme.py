@@ -35,8 +35,8 @@ MONO_FONT = "JetBrains Mono, ui-monospace, monospace"
 
 def _layout(colors: dict) -> dict:
     return dict(
-        paper_bgcolor=colors["card"],
-        plot_bgcolor=colors["card"],
+        paper_bgcolor="rgba(0,0,0,0)",  # the console grid shows through
+        plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family=UI_FONT, color=colors["text"], size=13),
         colorway=SERIES_COLORS,
         margin=dict(l=48, r=20, t=48, b=40),
@@ -47,7 +47,7 @@ def _layout(colors: dict) -> dict:
                    tickfont=dict(color=colors["muted"], family=MONO_FONT)),
         yaxis=dict(gridcolor=colors["border"], linecolor=colors["border"], zeroline=False,
                    tickfont=dict(color=colors["muted"], family=MONO_FONT)),
-        title=dict(font=dict(size=15, color=colors["text"]), x=0, xanchor="left"),
+        title=dict(font=dict(size=13, color=colors["muted"], family=MONO_FONT), x=0, xanchor="left"),
     )
 
 

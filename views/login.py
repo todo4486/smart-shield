@@ -7,7 +7,6 @@ import streamlit as st
 
 from components import intro
 from components.theme import hide_sidebar
-from config import ASSETS_DIR
 from services import auth_service, session_service
 
 hide_sidebar()
@@ -18,23 +17,22 @@ first_run = not auth_service.has_any_users()
 registration_open = auth_service.registration_open()
 
 FEATURES = [
-    ("🛡️", "Smart Shield", "Machine-learning intrusion and anomaly detection on network flows."),
-    ("📈", "PredictNet", "Congestion forecasting and capacity-aware bandwidth recommendations."),
-    ("🔗", "Unified intelligence", "Security and performance evidence correlated without assuming congestion is an attack."),
+    ("01", "Smart Shield", "Machine-learning intrusion and anomaly detection on network flows."),
+    ("02", "PredictNet", "Congestion forecasting and capacity-aware bandwidth recommendations."),
+    ("03", "Unified intelligence", "Security and performance evidence correlated without assuming congestion is an attack."),
 ]
 
 st.write("")
 brand_col, gap, form_col = st.columns([1.15, 0.12, 1])
 
 with brand_col:
-    logo_svg = (ASSETS_DIR / "shield_icon.svg").read_text(encoding="utf-8")
     features = "".join(
         f"<div class='ss-feature'><div class='ss-feature-icon'>{escape(icon)}</div>"
         f"<div><b>{escape(title)}</b><span>{escape(text)}</span></div></div>"
         for icon, title, text in FEATURES
     )
     st.markdown(
-        f"<div class='ss-brand'>{logo_svg}<h1>Smart Shield</h1>"
+        "<div class='ss-brand'><i class='ss-brand-scope' aria-hidden='true'></i><div class='ss-brand-word'><div class='ss-eyebrow'>Network intelligence console</div><h1>Smart Shield</h1></div>"
         "<div class='ss-tagline'>An AI-powered network intelligence platform for intrusion detection, "
         "congestion prediction and intelligent bandwidth management.</div>"
         f"{features}</div>",

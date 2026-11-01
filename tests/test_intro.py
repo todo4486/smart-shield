@@ -83,3 +83,16 @@ def test_reduce_motion_skips_the_welcome(admin_user, admin):
     app = _app()
     _sign_in(app)
     assert not app.exception and not _intro_shown(app, "Welcome,")
+
+
+def test_the_intro_shows_only_the_brand_and_no_figures():
+    """It looks like a radar, so it must not look like a reading: no invented hosts, counts or statuses."""
+    visible = re.sub(r"<[^>]+>", "", re.sub(r"<defs>.*?</defs>", "", intro.intro_html())).replace("&nbsp;", " ")
+    assert visible == "Smart ShieldPOWERED BY PREDICTNET"
+    assert not re.search(r"\d", visible)
+
+
+def test_the_sign_in_page_keeps_its_name_as_a_real_heading():
+    app = _app()
+    assert any("<h1>Smart Shield</h1>" in m.value for m in app.markdown)
+
