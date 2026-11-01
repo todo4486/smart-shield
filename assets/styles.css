@@ -252,3 +252,22 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 @keyframes ss-intro-load { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @keyframes ss-intro-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 
+/* Small motion everywhere (components/page_motion.py). Removed by Reduce motion like everything else. */
+[data-testid="stElementContainer"]:has(> [data-testid="stMarkdown"] .ss-page-motion) { position: absolute; height: 0; margin: 0; }
+.stApp::before { content: ""; position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 999990; pointer-events: none; opacity: 0;
+  background: var(--ss-accent, #3B82F6); transform: scaleX(0); transform-origin: left; }
+@keyframes ss-page-in-a { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes ss-page-in-b { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes ss-page-bar-a { 0% { opacity: 1; transform: scaleX(0); } 70% { opacity: 1; transform: scaleX(1); } 100% { opacity: 0; transform: scaleX(1); } }
+@keyframes ss-page-bar-b { 0% { opacity: 1; transform: scaleX(0); } 70% { opacity: 1; transform: scaleX(1); } 100% { opacity: 0; transform: scaleX(1); } }
+/* A tab's panel restarts this each time it is shown. */
+[role="tabpanel"] { animation: ss-tab-in .22s ease-out; }
+@keyframes ss-tab-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+[data-testid="stSidebarNav"] a, [data-testid="stSidebarNavLink"] { transition: background-color .16s ease-out, transform .16s ease-out; }
+[data-testid="stSidebarNavLink"]:hover { transform: translateX(2px); }
+.ss-kpi:hover, .ss-card:hover { transform: translateY(-2px); }
+.ss-kpi, .ss-card { transition: border-color var(--ss-motion) ease-out, background-color var(--ss-motion) ease-out, transform .16s ease-out; }
+.stButton > button, [data-testid="stFormSubmitButton"] > button { transition: transform .12s ease-out, background-color .16s ease-out, border-color .16s ease-out; }
+.stButton > button:active, [data-testid="stFormSubmitButton"] > button:active { transform: scale(.97); }
+[data-testid="stExpander"] details > div, [data-testid="stAlert"] { animation: ss-tab-in .2s ease-out; }
+
